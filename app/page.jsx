@@ -12,11 +12,11 @@ const LABELS = {
   customerName: "Customer", bikeNumbers: "Bike number(s)", customerDetails: "Contact / address",
   paymentStatus: "Payment", courierId: "Tracking / parcel ID", courierName: "Courier", trackingUrl: "Tracking URL", deliveryStatus: "Delivery", productionCost: "Production cost", deliveryFee: "Delivery fee", otherCost: "Other cost", paidAmount: "Paid amount", instructions: "Customization",
   reference1: "Extra field 1", reference2: "Extra field 2", quantity: "Quantity",
-  unitPrice: "Unit price", total: "Total", orderStatus: "Status", orderDate: "Order date",
+  unitPrice: "Unit price", total: "Total", dueAmount: "Due amount", orderStatus: "Status", orderDate: "Order date",
   createdAt: "Created", updatedAt: "Last updated", id: "Order ID"
 };
 const KNOWN_ORDER = Object.keys(LABELS);
-const MONEY_KEYS = ["unitPrice", "total", "productionCost", "deliveryFee", "otherCost", "paidAmount"];
+const MONEY_KEYS = ["unitPrice", "total", "dueAmount", "productionCost", "deliveryFee", "otherCost", "paidAmount"];
 
 const EMPTY = {
   customerName: "", bikeNumbers: "", customerDetails: "", paymentStatus: "Unpaid",
@@ -96,6 +96,8 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label>Quantity<input {...f("quantity", { type: "number", min: 1, required: true })} /></label>
         <label>Price per item (৳)<input {...f("unitPrice", { type: "number", min: 0, required: true })} /></label>
         <label>Total (৳)<input {...f("total", { type: "number", min: 0, required: true })} /></label>
+        <label>Amount paid (৳)<input {...f("paidAmount", { type: "number", min: 0, step: "0.01" })} /></label>
+        <label>Due amount (৳)<input value={money(Math.max(0, total - Number(form.paidAmount || 0)))} readOnly /></label>
         <label>Payment<select {...f("paymentStatus")}>{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
         <label>Order status<select {...f("orderStatus")}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select></label>
         <label>Order date<input {...f("orderDate", { type: "date" })} /></label>
@@ -109,7 +111,6 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label>Production cost (৳)<input {...f("productionCost", { type: "number", min: 0 })} /></label>
         <label>Delivery fee (৳)<input {...f("deliveryFee", { type: "number", min: 0 })} /></label>
         <label>Other cost (৳)<input {...f("otherCost", { type: "number", min: 0 })} /></label>
-        <label>Amount received (৳)<input {...f("paidAmount", { type: "number", min: 0 })} /></label>
         <label>Courier<input {...f("courierName", { placeholder: "Pathao, Steadfast…" })} /></label>
         <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
         <label className="wide">Tracking URL<input {...f("trackingUrl", { type: "url", placeholder: "https://…" })} /></label>
@@ -306,6 +307,7 @@ function Dashboard({ user }) {
       total: form.total === "" ? qty * price : Number(form.total),
       productionCost: Number(form.productionCost || 0), deliveryFee: Number(form.deliveryFee || 0),
       otherCost: Number(form.otherCost || 0), paidAmount: Number(form.paidAmount || 0),
+      dueAmount: Math.max(0, Number(form.total === "" ? qty * price : form.total) - Number(form.paidAmount || 0)),
       updatedAt: new Date().toISOString()
     };
     try {
