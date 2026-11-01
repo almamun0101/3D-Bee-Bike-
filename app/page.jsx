@@ -9,7 +9,7 @@ const STATUSES = ["Pending", "Processing", "Printing", "Ready to ship", "Shipped
 const PAYMENTS = ["Unpaid", "Pending", "Paid Advance", "Paid Full", "Cash On Delivery"];
 
 const LABELS = {
-  customerName: "Customer", bikeNumbers: "Bike number(s)", customerDetails: "Contact / address",
+  customerName: "Customer", bikeNumbers: "Bike number(s)", customerDetails: "Contact / address", deliveryArea: "Delivery area",
   paymentStatus: "Payment", courierId: "Tracking / parcel ID", courierName: "Courier", trackingUrl: "Tracking URL", deliveryStatus: "Delivery", productionCost: "Production cost", deliveryFee: "Delivery fee", otherCost: "Other cost", paidAmount: "Paid amount", instructions: "Customization",
   reference1: "Extra field 1", reference2: "Extra field 2", quantity: "Quantity",
   unitPrice: "Unit price", total: "Total", dueAmount: "Due amount", orderStatus: "Status", orderDate: "Order date",
@@ -22,7 +22,7 @@ const EMPTY = {
   customerName: "", bikeNumbers: "", customerDetails: "", paymentStatus: "Unpaid",
   courierId: "", courierName: "", trackingUrl: "", deliveryStatus: "Not shipped",
   instructions: "", reference1: "", reference2: "", quantity: "1",
-  unitPrice: "250", total: "250", productionCost: "0", deliveryFee: "0", otherCost: "0",
+  unitPrice: "250", total: "330", deliveryArea: "Inside Dhaka", productionCost: "0", deliveryFee: "80", otherCost: "0",
   paidAmount: "0", orderStatus: "Pending", orderDate: ""
 };
 
@@ -72,6 +72,8 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
     quantity: initial.quantity || "1",
     unitPrice: initial.unitPrice || "250",
     total: initial.total || String((Number(initial.quantity || 1) || 1) * (Number(initial.unitPrice || 250) || 0)),
+    deliveryArea: initial.deliveryArea || (Number(initial.deliveryFee || 0) === 130 ? "Outside Dhaka" : Number(initial.deliveryFee || 0) === 80 ? "Inside Dhaka" : "No delivery"),
+    deliveryFee: initial.deliveryFee ?? "80",
     paymentStatus: initial.paymentStatus || "Unpaid",
     orderStatus: initial.orderStatus || "Pending"
   }));
@@ -79,11 +81,16 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
   function change(e) {
     const { name, value } = e.target;
     const next = { ...form, [name]: value };
-    if (name === "quantity" || name === "unitPrice") next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0));
+    if (name === "quantity" || name === "unitPrice") next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
+    if (name === "deliveryArea") {
+      next.deliveryFee = value === "Inside Dhaka" ? "80" : value === "Outside Dhaka" ? "130" : "0";
+      next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
+    }
     setForm(next);
   }
   const f = (name, props = {}) => ({ name, value: form[name] ?? "", onChange: change, ...props });
-  const total = Number(form.total || 0);
+  const itemSubtotal = (Number(form.quantity) || 0) * (Number(form.unitPrice) || 0);
+  const total = itemSubtotal + Number(form.deliveryFee || 0);
   return <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
     <form className="modal ordermodal" onSubmit={e => { e.preventDefault(); onSave(form); }}>
       <div className="modalhead">
@@ -95,7 +102,10 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label className="wide">Item / order details<input {...f("bikeNumbers", { placeholder: "e.g. Custom keychain, lithophane, model…" })} /></label>
         <label>Quantity<input {...f("quantity", { type: "number", min: 1, required: true })} /></label>
         <label>Price per item (৳)<input {...f("unitPrice", { type: "number", min: 0, required: true })} /></label>
-        <label>Total (৳)<input {...f("total", { type: "number", min: 0, required: true })} /></label>
+        <label>Items total (৳)<input value={money(itemSubtotal)} readOnly /></label>
+        <label>Delivery area<select {...f("deliveryArea")}><option>Inside Dhaka</option><option>Outside Dhaka</option><option>No delivery</option></select></label>
+        <label>Delivery cost (৳)<input value={money(form.deliveryFee)} readOnly /></label>
+        <label>Total incl. delivery (৳)<input value={money(total)} readOnly /></label>
         <label>Amount paid (৳)<input {...f("paidAmount", { type: "number", min: 0, step: "0.01" })} /></label>
         <label>Due amount (৳)<input value={money(Math.max(0, total - Number(form.paidAmount || 0)))} readOnly /></label>
         <label>Payment<select {...f("paymentStatus")}>{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
@@ -109,7 +119,6 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label className="wide">Phone / address<textarea {...f("customerDetails", { rows: 2, placeholder: "Phone number and delivery address" })} /></label>
         <label className="wide">Customization notes<textarea {...f("instructions", { rows: 2, placeholder: "Color, size, text, design notes…" })} /></label>
         <label>Production cost (৳)<input {...f("productionCost", { type: "number", min: 0 })} /></label>
-        <label>Delivery fee (৳)<input {...f("deliveryFee", { type: "number", min: 0 })} /></label>
         <label>Other cost (৳)<input {...f("otherCost", { type: "number", min: 0 })} /></label>
         <label>Courier<input {...f("courierName", { placeholder: "Pathao, Steadfast…" })} /></label>
         <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
@@ -119,7 +128,7 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label>Extra field 2<input {...f("reference2")} /></label>
       </div>}
       <div className="modalfoot orderfoot">
-        <span className="hint">Estimated total <strong>{money(total)}</strong></span>
+        <span className="hint">Total including delivery <strong>{money(total)}</strong></span>
         <div className="row">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
           <button className="btn primary" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "＋ Add order"}</button>
@@ -304,10 +313,11 @@ function Dashboard({ user }) {
     const qty = Number(form.quantity || 0), price = Number(form.unitPrice || 0);
     const payload = {
       ...form, quantity: qty, unitPrice: price,
-      total: form.total === "" ? qty * price : Number(form.total),
+      total: qty * price + Number(form.deliveryFee || 0),
+      itemsSubtotal: qty * price,
       productionCost: Number(form.productionCost || 0), deliveryFee: Number(form.deliveryFee || 0),
       otherCost: Number(form.otherCost || 0), paidAmount: Number(form.paidAmount || 0),
-      dueAmount: Math.max(0, Number(form.total === "" ? qty * price : form.total) - Number(form.paidAmount || 0)),
+      dueAmount: Math.max(0, qty * price + Number(form.deliveryFee || 0) - Number(form.paidAmount || 0)),
       updatedAt: new Date().toISOString()
     };
     try {
