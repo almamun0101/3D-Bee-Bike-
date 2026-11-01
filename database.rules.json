@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "3dbee v2": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}
