@@ -98,8 +98,11 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <button type="button" className="icon" onClick={onClose} aria-label="Close">✕</button>
       </div>
       <div className="grid ordergrid">
-        <label className="wide">Customer name *<input {...f("customerName", { required: true, autoFocus: true, placeholder: "Customer name" })} /></label>
+        <label>Customer name *<input {...f("customerName", { required: true, autoFocus: true, placeholder: "Customer name" })} /></label>
+        <label>Phone / address<textarea {...f("customerDetails", { rows: 2, placeholder: "Phone number and delivery address" })} /></label>
+        <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
         <label className="wide">Item / order details<input {...f("bikeNumbers", { placeholder: "e.g. Custom keychain, lithophane, model…" })} /></label>
+        <label className="wide note-field">Customization notes<textarea {...f("instructions", { rows: 3, placeholder: "✍️ Add important notes: color, size, text, design, customer requests…" })} /></label>
         <label>Quantity<input {...f("quantity", { type: "number", min: 1, required: true })} /></label>
         <label>Price per item (৳)<input {...f("unitPrice", { type: "number", min: 0, required: true })} /></label>
         <label>Items total (৳)<input value={money(itemSubtotal)} readOnly /></label>
@@ -113,15 +116,12 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label>Order date<input {...f("orderDate", { type: "date" })} /></label>
       </div>
       <button type="button" className="more-toggle" onClick={() => setShowMore(v => !v)}>
-        <span>{showMore ? "−" : "+"} More details</span><small>Contact, customization, delivery & costs</small>
+        <span>{showMore ? "−" : "+"} More details</span><small>Courier, tracking link, delivery & costs</small>
       </button>
       {showMore && <div className="grid ordergrid moregrid">
-        <label className="wide">Phone / address<textarea {...f("customerDetails", { rows: 2, placeholder: "Phone number and delivery address" })} /></label>
-        <label className="wide">Customization notes<textarea {...f("instructions", { rows: 2, placeholder: "Color, size, text, design notes…" })} /></label>
         <label>Production cost (৳)<input {...f("productionCost", { type: "number", min: 0 })} /></label>
         <label>Other cost (৳)<input {...f("otherCost", { type: "number", min: 0 })} /></label>
         <label>Courier<input {...f("courierName", { placeholder: "Pathao, Steadfast…" })} /></label>
-        <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
         <label className="wide">Tracking URL<input {...f("trackingUrl", { type: "url", placeholder: "https://…" })} /></label>
         <label>Delivery status<select {...f("deliveryStatus")}>{["Not shipped", "Ready for pickup", "Picked up", "In transit", "Out for delivery", "Delivered", "Delivery failed", "Returned"].map(x => <option key={x}>{x}</option>)}</select></label>
         <label>Extra field 1<input {...f("reference1")} /></label>

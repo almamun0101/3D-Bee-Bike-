@@ -183,3 +183,10 @@ a{color:var(--blue);text-decoration:none;font-weight:600}a:hover{text-decoration
 .moregrid{padding-top:2px}
 .orderfoot{position:sticky;bottom:-20px;background:var(--surface);padding:14px 0 2px}
 @media(max-width:540px){.ordergrid{grid-template-columns:1fr 1fr}.ordergrid .wide{grid-column:span 2}.more-toggle{align-items:flex-start;flex-direction:column;gap:3px}}
+
+/* Make customization notes easy to spot in the order form */
+.note-field{grid-column:1 / -1;padding:12px 14px;border:1px solid var(--gold-dark);border-radius:13px;background:var(--amber-bg);box-shadow:0 0 0 2px #f6c34326}
+.note-field>label,.note-field{color:var(--amber)}
+.note-field textarea{background:var(--surface);border:1px solid var(--gold-dark);min-height:76px;font-weight:500;color:var(--ink)}
+.note-field textarea::placeholder{color:var(--muted);opacity:1}
+@media(max-width:540px){.note-field{grid-column:1 / -1}}
