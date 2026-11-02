@@ -1,3 +1,14 @@
+## Version 2.1.0 update
+
+- Added manual light/dark theme switching with a saved browser preference.
+- Added keyboard focus shortcuts for order search (`Ctrl+K` or `/`).
+- Corrected full-payment and unpaid-state calculations so the recorded paid amount and due amount stay in sync.
+- Added numeric validation before writing order values to Firebase.
+- Hardened CSV exports against spreadsheet formula injection.
+- Only allow HTTP/HTTPS tracking links from stored order data.
+- Improved responsive layout, focus visibility, reduced-motion support, and dashboard surfaces.
+- Marked the Next.js global error boundary as a client component.
+
 # 3D Bee Order Desk — Next.js + Firebase Realtime Database
 
 A live order-management dashboard for 3D Bee. Orders are stored in Firebase Realtime Database at `/3dbee v2/orders`; all signed-in dashboards subscribe to the same database path and receive changes in real time.

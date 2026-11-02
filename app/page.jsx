@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
@@ -39,6 +39,12 @@ const isPaid = s => /^paid/i.test(s || "");
 const orderDue = o => Math.max(0, Number(o.total || 0) - (o.paidAmount !== undefined && o.paidAmount !== null && o.paidAmount !== "" ? Number(o.paidAmount) : (isPaid(o.paymentStatus) ? Number(o.total || 0) : 0)));
 const isDone = s => /deliver|complet|cancel/i.test(s || "");
 const display = (k, v) => v === undefined || v === null || v === "" ? "—" : MONEY_KEYS.includes(k) ? money(v) : ["createdAt", "updatedAt"].includes(k) ? fmtDate(v) : typeof v === "object" ? JSON.stringify(v) : String(v);
+const safeTrackingUrl = value => {
+  try {
+    const url = new URL(String(value || ""));
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch { return ""; }
+};
 
 /* ───────────── Login ───────────── */
 function Login() {
@@ -87,8 +93,12 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
       next.deliveryFee = value === "Inside Dhaka" ? "80" : value === "Outside Dhaka" ? "130" : "0";
       next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
     }
-    if (name === "paymentStatus" && /^paid full$/i.test(value)) {
-      next.paidAmount = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
+    if (name === "paymentStatus") {
+      if (/^paid full$/i.test(value)) {
+        next.paidAmount = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
+      } else if (/^unpaid$/i.test(value)) {
+        next.paidAmount = "0";
+      }
     }
     setForm(next);
   }
@@ -162,7 +172,7 @@ function Drawer({ order, onClose, onEdit, onDelete, onQuick }) {
         <label>Payment<select value={order.paymentStatus || ""} onChange={e => onQuick(order.id, "paymentStatus", e.target.value)}>
           {!PAYMENTS.includes(order.paymentStatus) && order.paymentStatus && <option>{order.paymentStatus}</option>}{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
       </div>
-      {order.trackingUrl && <a className="btn" href={order.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a>}
+      {safeTrackingUrl(order.trackingUrl) && <a className="btn" href={safeTrackingUrl(order.trackingUrl)} target="_blank" rel="noopener noreferrer">Track parcel ↗</a>}
       {order.instructions && <section className="drawer-note"><strong>✍️ Important customization note</strong><p>{order.instructions}</p></section>}
       <dl className="fields">
         {keys.map(k => <div key={k}><dt>{prettyKey(k)}</dt><dd>{display(k, order[k])}</dd></div>)}
@@ -198,6 +208,23 @@ function Dashboard({ user }) {
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState(null);
+  const [theme, setTheme] = useState("system");
+  const searchRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("3dbee-theme");
+      if (saved === "light" || saved === "dark") setTheme(saved);
+    } catch { /* Keep the system theme when browser storage is unavailable. */ }
+  }, []);
+
+  useEffect(() => {
+    if (theme === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+    if (theme !== "system") {
+      try { window.localStorage.setItem("3dbee-theme", theme); } catch { /* Theme still applies for this session. */ }
+    }
+  }, [theme]);
 
   const notify = useCallback((text, bad) => {
     setToast({ text, bad });
@@ -238,7 +265,11 @@ function Dashboard({ user }) {
   }, [toast]);
 
   useEffect(() => {
-    const onKey = e => { if (e.key === "Escape") { setModal(null); setSelected(null); } };
+    const onKey = e => {
+      if (e.key === "Escape") { setModal(null); setSelected(null); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); searchRef.current?.focus(); }
+      if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) { e.preventDefault(); searchRef.current?.focus(); }
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -306,7 +337,12 @@ function Dashboard({ user }) {
       const now = new Date().toISOString();
       const current = orders.find(o => o.id === id);
       const patch = { [field]: value, updatedAt: now };
-      if (field === "paymentStatus" && /^paid full$/i.test(value)) patch.paidAmount = Number(current?.total || 0);
+      if (field === "paymentStatus") {
+        const paid = /^paid full$/i.test(value) ? Number(current?.total || 0)
+          : /^unpaid$/i.test(value) ? 0 : Number(current?.paidAmount || 0);
+        patch.paidAmount = paid;
+        patch.dueAmount = Math.max(0, Number(current?.total || 0) - paid);
+      }
       if (field === "orderStatus" && current?.orderStatus !== value) {
         const timeline = Array.isArray(current?.timeline) ? current.timeline : [];
         patch.timeline = [...timeline, { status: value, note: "Order status changed", at: now }];
@@ -319,15 +355,23 @@ function Dashboard({ user }) {
   async function save(form) {
     setBusy(true);
     const qty = Number(form.quantity || 0), price = Number(form.unitPrice || 0);
-    const calculatedTotal = qty * price + Number(form.deliveryFee || 0);
-    const receivedAmount = /^paid full$/i.test(form.paymentStatus || "") ? calculatedTotal : Number(form.paidAmount || 0);
+    const deliveryFee = Number(form.deliveryFee || 0);
+    const receivedInput = Number(form.paidAmount || 0);
+    const costValues = [form.productionCost, form.otherCost].map(v => Number(v || 0));
+    if (!Number.isInteger(qty) || qty < 1 || ![price, deliveryFee, receivedInput, ...costValues].every(v => Number.isFinite(v) && v >= 0)) {
+      notify("Check quantity and amounts. They must be valid non-negative numbers.", true);
+      setBusy(false);
+      return;
+    }
+    const calculatedTotal = qty * price + deliveryFee;
+    const receivedAmount = /^paid full$/i.test(form.paymentStatus || "") ? calculatedTotal : receivedInput;
     const payload = {
       ...form, quantity: qty, unitPrice: price,
       total: calculatedTotal,
       itemsSubtotal: qty * price,
       productionCost: Number(form.productionCost || 0), deliveryFee: Number(form.deliveryFee || 0),
-      otherCost: Number(form.otherCost || 0), paidAmount: Number(form.paidAmount || 0),
-      dueAmount: Math.max(0, qty * price + Number(form.deliveryFee || 0) - Number(form.paidAmount || 0)),
+      otherCost: Number(form.otherCost || 0), paidAmount: receivedAmount,
+      dueAmount: Math.max(0, calculatedTotal - receivedAmount),
       updatedAt: new Date().toISOString()
     };
     try {
@@ -368,7 +412,12 @@ function Dashboard({ user }) {
 
   function exportCsv() {
     const keys = [...KNOWN_ORDER, ...[...new Set(orders.flatMap(o => Object.keys(o)))].filter(k => !KNOWN_ORDER.includes(k))];
-    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const esc = v => {
+      const value = String(v ?? "");
+      // Prefix formula-like values so exported CSVs are safer to open in spreadsheets.
+      const safe = /^[\s]*[=+\-@]/.test(value) ? `'${value}` : value;
+      return `"${safe.replace(/"/g, '""')}"`;
+    };
     const csv = [keys.map(prettyKey).map(esc).join(","), ...visible.map(o => keys.map(k => esc(o[k])).join(","))].join("\n");
     const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
     const a = Object.assign(document.createElement("a"), { href: url, download: `3d-bee-orders-${new Date().toISOString().slice(0, 10)}.csv` });
@@ -388,6 +437,7 @@ function Dashboard({ user }) {
         <div><div className="eyebrow">3D BEE</div><h1>Order Desk</h1></div></div>
       <div className="row wrap">
         <span className={`live ${online ? "on" : ""}`}><i />{online ? "Live" : "Offline"}</span>
+        <button className="btn" onClick={() => setTheme(current => current === "dark" ? "light" : "dark")} aria-label="Toggle color theme" title="Toggle light / dark theme">{theme === "dark" ? "☀ Light" : "☾ Dark"}</button>
         <button className="btn" onClick={exportCsv} disabled={!orders.length}>⬇ Export CSV</button>
         <button className="btn primary" onClick={() => setModal({ values: EMPTY })}>＋ New order</button>
         {REQUIRE_LOGIN && <button className="btn ghost" onClick={() => signOut(getAuthInstance())} title={user?.email}>Sign out</button>}
@@ -401,7 +451,8 @@ function Dashboard({ user }) {
       <div className="stat"><span>Collected payments</span><strong>{money(stats.collected)}</strong><small>Money received</small></div>
       <div className="stat"><span>Estimated profit</span><strong>{money(stats.profit)}</strong><small>After recorded costs</small></div>
       <div className="stat warn"><span>Payment due</span><strong>{money(stats.due)}</strong></div>
-      <div className="stat"><span>Active orders</span><strong>{stats.active}</strong></div>\n      <div className="stat"><span>Average order value</span><strong>{money(stats.average)}</strong><small>Per non-cancelled order</small></div>\n      <div className="stat"><span>Over 7 days with due</span><strong>{stats.overdue}</strong><small>Follow-up recommended</small></div>
+      <div className="stat"><span>Active orders</span><strong>{stats.active}</strong></div>
+      <div className="stat"><span>Average order value</span><strong>{money(stats.average)}</strong><small>Per non-cancelled order</small></div>\n      <div className="stat"><span>Over 7 days with due</span><strong>{stats.overdue}</strong><small>Follow-up recommended</small></div>
       <div className="stat"><span>Order-level costs</span><strong>{money(stats.costs)}</strong></div>
       <div className="stat"><span>Business expenses</span><strong>{money(stats.overhead)}</strong></div>
       <div className="stat"><span>Awaiting delivery</span><strong>{stats.delivery}</strong></div>
@@ -425,7 +476,7 @@ function Dashboard({ user }) {
 
     <section className="panel">
       <div className="toolbar">
-        <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search any field — name, bike, phone, courier, notes…" />
+        <input ref={searchRef} className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search any field — name, bike, phone, courier, notes…" aria-label="Search orders" />
         <select value={payFilter} onChange={e => setPayFilter(e.target.value)} aria-label="Payment filter">
           <option value="All">All payments</option>{PAYMENTS.map(p => <option key={p}>{p}</option>)}</select>
         <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
@@ -450,7 +501,7 @@ function Dashboard({ user }) {
             <td><strong className="due-cell">{money(orderDue(o))} due</strong><small>Bill {money(o.total)}</small></td>
             <td>{quickSelect(o, "paymentStatus", PAYMENTS, payTone)}</td>
             <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}</td>
-            <td>{o.courierId}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td><td className="pre">{o.reference1}</td><td className="pre">{o.reference2}</td>
+            <td>{o.courierId}{safeTrackingUrl(o.trackingUrl) && <small><a href={safeTrackingUrl(o.trackingUrl)} target="_blank" rel="noopener noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td><td className="pre">{o.reference1}</td><td className="pre">{o.reference2}</td>
             <td className="nowrap">{fmtDate(o.createdAt)}</td><td className="nowrap">{fmtDate(o.updatedAt)}</td>
             <td><button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
           </tr>)}</tbody></table></div>
@@ -459,7 +510,7 @@ function Dashboard({ user }) {
           <div className="cardtop"><strong>{o.customerName || "—"}</strong><b className="due-cell">{money(orderDue(o))} due</b></div>
           <p>{o.bikeNumbers || "No bike number"} · Qty {o.quantity ?? "—"}</p>
           <p className="clip">{o.customerDetails}</p>{o.instructions && <div className="card-note"><strong>✍️ Important note</strong><p>{o.instructions}</p></div>}
-          {o.trackingUrl && <a href={o.trackingUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
+          {safeTrackingUrl(o.trackingUrl) && <a href={safeTrackingUrl(o.trackingUrl)} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
           <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
             <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span></div>
         </article>)}</div></>}
