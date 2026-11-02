@@ -39,6 +39,25 @@ const isPaid = s => /^paid/i.test(s || "");
 const isDone = s => /deliver|complet|cancel/i.test(s || "");
 const display = (k, v) => v === undefined || v === null || v === "" ? "—" : MONEY_KEYS.includes(k) ? money(v) : ["createdAt", "updatedAt"].includes(k) ? fmtDate(v) : typeof v === "object" ? JSON.stringify(v) : String(v);
 
+const splitBikeNumbers = value => String(value || "")
+  .split(/[,\n;]+/)
+  .map(v => v.trim())
+  .filter(Boolean);
+const normalizeBikeNumber = value => String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+const editDistance = (a, b) => {
+  if (a.length > 32 || b.length > 32) return 99;
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0]; row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const old = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = old;
+    }
+  }
+  return row[b.length];
+};
+
 /* ───────────── Login ───────────── */
 function Login() {
   const [email, setEmail] = useState("");
@@ -65,11 +84,11 @@ function Login() {
 }
 
 /* ───────────── Order form (modal) ───────────── */
-function OrderModal({ initial, editing, onClose, onSave, busy }) {
+function OrderModal({ initial, editing, onClose, onSave, busy, orders }) {
   const [form, setForm] = useState(() => ({
     ...initial,
     orderDate: initial.orderDate || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }),
-    quantity: initial.quantity || "1",
+    quantity: initial.bikeNumbers ? String(splitBikeNumbers(initial.bikeNumbers).length || 1) : (initial.quantity || "1"),
     unitPrice: initial.unitPrice || "250",
     total: initial.total || String((Number(initial.quantity || 1) || 1) * (Number(initial.unitPrice || 250) || 0)),
     deliveryArea: initial.deliveryArea || (Number(initial.deliveryFee || 0) === 130 ? "Outside Dhaka" : Number(initial.deliveryFee || 0) === 80 ? "Inside Dhaka" : "No delivery"),
@@ -78,9 +97,30 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
     orderStatus: initial.orderStatus || "Pending"
   }));
   const [showMore, setShowMore] = useState(false);
+  const enteredNumbers = splitBikeNumbers(form.bikeNumbers);
+  const duplicateWithinEntry = enteredNumbers.filter((n, i) =>
+    enteredNumbers.findIndex(x => normalizeBikeNumber(x) === normalizeBikeNumber(n)) !== i);
+  const existingMatches = enteredNumbers.flatMap(number => {
+    const normalized = normalizeBikeNumber(number);
+    if (!normalized) return [];
+    return (orders || []).filter(order => order.id !== initial.id).flatMap(order =>
+      splitBikeNumbers(order.bikeNumbers).filter(existing => {
+        const other = normalizeBikeNumber(existing);
+        return other && (other === normalized || (other.length >= 5 && normalized.length >= 5 &&
+          (other.includes(normalized) || normalized.includes(other) || editDistance(other, normalized) <= 1)));
+      }).map(existing => ({ number: existing, customer: order.customerName || "Unknown customer", orderId: order.id, exact: normalizeBikeNumber(existing) === normalized }))
+    );
+  });
+  const exactMatches = existingMatches.filter(x => x.exact);
+  const uniqueSimilarMatches = existingMatches.filter((x, i, a) => a.findIndex(y => y.orderId === x.orderId && normalizeBikeNumber(y.number) === normalizeBikeNumber(x.number)) === i);
   function change(e) {
     const { name, value } = e.target;
     const next = { ...form, [name]: value };
+    if (name === "bikeNumbers") {
+      const count = splitBikeNumbers(value).length;
+      next.quantity = String(count || 1);
+      next.total = String((count || 1) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
+    }
     if (name === "quantity" || name === "unitPrice") next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
     if (name === "deliveryArea") {
       next.deliveryFee = value === "Inside Dhaka" ? "80" : value === "Outside Dhaka" ? "130" : "0";
@@ -92,7 +132,7 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
   const itemSubtotal = (Number(form.quantity) || 0) * (Number(form.unitPrice) || 0);
   const total = itemSubtotal + Number(form.deliveryFee || 0);
   return <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-    <form className="modal ordermodal" onSubmit={e => { e.preventDefault(); onSave(form); }}>
+    <form className="modal ordermodal" onSubmit={e => { e.preventDefault(); onSave({ ...form, quantity: String(splitBikeNumbers(form.bikeNumbers).length || 1) }); }}>
       <div className="modalhead">
         <div><h2>{editing ? "Edit order" : "New order"}</h2><p>{editing ? "Update the order details." : "Add the essentials now. You can fill in the rest later."}</p></div>
         <button type="button" className="icon" onClick={onClose} aria-label="Close">✕</button>
@@ -101,9 +141,15 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label>Customer name *<input {...f("customerName", { required: true, autoFocus: true, placeholder: "Customer name" })} /></label>
         <label>Phone / address<textarea {...f("customerDetails", { rows: 2, placeholder: "Phone number and delivery address" })} /></label>
         <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
-        <label className="wide">Item / order details<input {...f("bikeNumbers", { placeholder: "e.g. Custom keychain, lithophane, model…" })} /></label>
+        <label className="wide">Bike number(s) / item description
+          <textarea {...f("bikeNumbers", { rows: 3, placeholder: "Enter one bike number per line, or separate with commas" })} />
+          <small className="field-help">Enter each bike number on a new line or separate them with commas. Quantity is calculated automatically.</small>
+        </label>
+        {duplicateWithinEntry.length > 0 && <div className="number-alert error wide"><strong>Duplicate number in this order</strong><span>{[...new Set(duplicateWithinEntry)].join(", ")} — remove repeated entries before saving.</span></div>}
+        {exactMatches.length > 0 && <div className="number-alert error wide"><strong>Already added in another order</strong>{exactMatches.map((m, i) => <span key={`${m.orderId}-${i}`}>{m.number} · {m.customer}</span>)}</div>}
+        {uniqueSimilarMatches.length > 0 && <div className="number-alert warning wide"><strong>Similar existing bike number(s) — please verify</strong>{uniqueSimilarMatches.map((m, i) => <span key={`${m.orderId}-${i}`}>{m.number} · {m.customer} {m.exact ? "(exact match)" : "(similar)"}</span>)}</div>}
         <label className="wide note-field">Customization notes<textarea {...f("instructions", { rows: 3, placeholder: "✍️ Add important notes: color, size, text, design, customer requests…" })} /></label>
-        <label>Quantity<input {...f("quantity", { type: "number", min: 1, required: true })} /></label>
+        <label>Quantity<input {...f("quantity", { type: "number", min: 1, required: true, readOnly: true })} /><small className="field-help">Automatically counted from bike numbers</small></label>
         <label>Price per item (৳)<input {...f("unitPrice", { type: "number", min: 0, required: true })} /></label>
         <label>Items total (৳)<input value={money(itemSubtotal)} readOnly /></label>
         <label>Delivery area<select {...f("deliveryArea")}><option>Inside Dhaka</option><option>Outside Dhaka</option><option>No delivery</option></select></label>
@@ -309,8 +355,23 @@ function Dashboard({ user }) {
   }
 
   async function save(form) {
+    const numbers = splitBikeNumbers(form.bikeNumbers);
+    const normalized = numbers.map(normalizeBikeNumber).filter(Boolean);
+    if (new Set(normalized).size !== normalized.length) {
+      notify("Duplicate bike number found in this order. Remove repeated numbers.", true);
+      return;
+    }
+    const duplicates = orders.filter(o => o.id !== modal?.id).flatMap(o =>
+      splitBikeNumbers(o.bikeNumbers)
+        .filter(n => normalized.includes(normalizeBikeNumber(n)))
+        .map(n => ({ number: n, customer: o.customerName }))
+    );
+    if (duplicates.length) {
+      notify("This bike number already exists in another order: " + duplicates.map(x => x.number).join(", "), true);
+      return;
+    }
     setBusy(true);
-    const qty = Number(form.quantity || 0), price = Number(form.unitPrice || 0);
+    const qty = numbers.length || 1, price = Number(form.unitPrice || 0);
     const payload = {
       ...form, quantity: qty, unitPrice: price,
       total: qty * price + Number(form.deliveryFee || 0),
@@ -410,7 +471,7 @@ function Dashboard({ user }) {
 
     <section className="panel">
       <div className="toolbar">
-        <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search any field — name, bike, phone, courier, notes…" />
+        <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search bike number / item description, name, phone, courier, notes…" />
         <select value={payFilter} onChange={e => setPayFilter(e.target.value)} aria-label="Payment filter">
           <option value="All">All payments</option>{PAYMENTS.map(p => <option key={p}>{p}</option>)}</select>
         <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
@@ -451,7 +512,7 @@ function Dashboard({ user }) {
     </section>
     <footer>3D Bee Order Desk · live Firebase sync · {visible.length} of {orders.length} orders shown · {lastSynced ? `Last sync ${lastSynced.toLocaleTimeString()}` : "Waiting for sync"}</footer>
 
-    {modal && <OrderModal initial={modal.values} editing={!!modal.id} busy={busy} onClose={() => setModal(null)} onSave={save} />}
+    {modal && <OrderModal initial={{ ...modal.values, id: modal.id }} editing={!!modal.id} orders={orders} busy={busy} onClose={() => setModal(null)} onSave={save} />}
     {selectedOrder && <Drawer order={selectedOrder} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} />}
     {toast && <div className={`toast ${toast.bad ? "bad" : ""}`} role="status">{toast.text}</div>}
   </div>;
