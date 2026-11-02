@@ -190,3 +190,23 @@ a{color:var(--blue);text-decoration:none;font-weight:600}a:hover{text-decoration
 .note-field textarea{background:var(--surface);border:1px solid var(--gold-dark);min-height:76px;font-weight:500;color:var(--ink)}
 .note-field textarea::placeholder{color:var(--muted);opacity:1}
 @media(max-width:540px){.note-field{grid-column:1 / -1}}
+
+
+/* 3D Bee finance-first dashboard */
+.due-cell{color:var(--red);font-weight:800;letter-spacing:-.2px}
+.due-summary{display:flex;flex-direction:column;gap:2px;color:var(--red);font-size:12px;font-weight:700}
+.due-summary strong{font-size:24px;line-height:1.15}
+.due-summary small{color:var(--muted);font-weight:500}
+.card-note,.drawer-note{padding:12px 14px;border:1px solid var(--gold-dark);background:var(--amber-bg);border-radius:12px;color:var(--ink)}
+.card-note strong,.drawer-note strong{display:block;color:var(--amber);font-size:12px;margin-bottom:5px}
+.card-note p,.drawer-note p{white-space:pre-wrap;color:var(--ink);font-weight:600;font-size:13px}
+.drawer-note{margin:0 0 2px}
+.business-strip{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 18px;margin:-5px 0 18px;background:linear-gradient(120deg,var(--surface),var(--amber-bg));border:1px solid var(--line);border-radius:16px}
+.business-strip>div:first-child{display:flex;align-items:center;gap:12px;min-width:0}
+.business-mark{display:grid;place-items:center;width:42px;height:42px;background:var(--gold);border-radius:13px;font-size:22px;flex:none}
+.business-strip strong,.business-strip small{display:block}
+.business-strip small{color:var(--muted);font-size:11px;margin-top:3px}
+.business-meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11px;font-weight:700}
+.stat.warn{border:2px solid var(--red);background:linear-gradient(135deg,var(--red-bg),var(--surface))}
+.stat.warn strong{color:var(--red);font-size:29px}
+@media(max-width:700px){.business-strip{align-items:flex-start;flex-direction:column}.business-meta{gap:8px 14px}}

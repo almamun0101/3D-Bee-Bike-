@@ -8,7 +8,7 @@ A live order-management dashboard for 3D Bee. Orders are stored in Firebase Real
 - Add, edit, delete and quick-update order/payment status
 - Realtime sync status and last-sync indicator
 - Delivery partner, parcel ID, tracking URL and delivery status
-- Sales, outstanding payments, recorded costs and estimated profit dashboard
+- Finance-first dashboard: outstanding due, collected payments, estimated profit, average order value and overdue follow-ups\n- Prominent customization notes in order cards and details\n- 3D Bee business identity and operational overview strip
 - Production, delivery and miscellaneous cost fields; amount received tracking
 - Basic order status timeline for newly created and edited orders
 - Search every order field, filter, sort and CSV export

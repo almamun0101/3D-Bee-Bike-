@@ -36,6 +36,7 @@ const fmtDate = v => {
 const statusTone = s => /deliver|complet/i.test(s) ? "green" : /cancel/i.test(s) ? "red" : /ship|ready/i.test(s) ? "violet" : /process|print/i.test(s) ? "blue" : "amber";
 const payTone = s => /^unpaid/i.test(s) ? "red" : /^paid/i.test(s) ? "green" : /cash/i.test(s) ? "blue" : "amber";
 const isPaid = s => /^paid/i.test(s || "");
+const orderDue = o => Math.max(0, Number(o.total || 0) - (o.paidAmount !== undefined && o.paidAmount !== null && o.paidAmount !== "" ? Number(o.paidAmount) : (isPaid(o.paymentStatus) ? Number(o.total || 0) : 0)));
 const isDone = s => /deliver|complet|cancel/i.test(s || "");
 const display = (k, v) => v === undefined || v === null || v === "" ? "—" : MONEY_KEYS.includes(k) ? money(v) : ["createdAt", "updatedAt"].includes(k) ? fmtDate(v) : typeof v === "object" ? JSON.stringify(v) : String(v);
 
@@ -85,6 +86,9 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
     if (name === "deliveryArea") {
       next.deliveryFee = value === "Inside Dhaka" ? "80" : value === "Outside Dhaka" ? "130" : "0";
       next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
+    }
+    if (name === "paymentStatus" && /^paid full$/i.test(value)) {
+      next.paidAmount = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
     }
     setForm(next);
   }
@@ -150,7 +154,7 @@ function Drawer({ order, onClose, onEdit, onDelete, onQuick }) {
       <div className="drawertags">
         <span className={`pill ${statusTone(order.orderStatus)}`}>{order.orderStatus || "—"}</span>
         <span className={`pill ${payTone(order.paymentStatus)}`}>{order.paymentStatus || "—"}</span>
-        <strong className="big">{money(order.total)}</strong>
+        <strong className="big">{money(orderDue(order))} due</strong>
       </div>
       <div className="quick">
         <label>Status<select value={order.orderStatus || ""} onChange={e => onQuick(order.id, "orderStatus", e.target.value)}>
@@ -159,6 +163,7 @@ function Drawer({ order, onClose, onEdit, onDelete, onQuick }) {
           {!PAYMENTS.includes(order.paymentStatus) && order.paymentStatus && <option>{order.paymentStatus}</option>}{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
       </div>
       {order.trackingUrl && <a className="btn" href={order.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a>}
+      {order.instructions && <section className="drawer-note"><strong>✍️ Important customization note</strong><p>{order.instructions}</p></section>}
       <dl className="fields">
         {keys.map(k => <div key={k}><dt>{prettyKey(k)}</dt><dd>{display(k, order[k])}</dd></div>)}
       </dl>
@@ -245,12 +250,15 @@ function Dashboard({ user }) {
     return {
       count: orders.length,
       value: live.reduce((s, o) => s + Number(o.total || 0), 0),
-      due: live.reduce((s, o) => s + Math.max(0, Number(o.total || 0) - Number(o.paidAmount || (isPaid(o.paymentStatus) ? o.total : 0))), 0),
+      due: live.reduce((s, o) => s + orderDue(o), 0),
       costs: live.reduce((s, o) => s + Number(o.productionCost || 0) + Number(o.deliveryFee || 0) + Number(o.otherCost || 0), 0),
       overhead: expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
       profit: live.reduce((s, o) => s + Number(o.total || 0) - Number(o.productionCost || 0) - Number(o.deliveryFee || 0) - Number(o.otherCost || 0), 0) - expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
       active: orders.filter(o => !isDone(o.orderStatus)).length,
-      delivery: live.filter(o => !/delivered/i.test(o.deliveryStatus || "") && !/cancel/i.test(o.orderStatus || "")).length
+      delivery: live.filter(o => !/delivered/i.test(o.deliveryStatus || "") && !/cancel/i.test(o.orderStatus || "")).length,
+      collected: live.reduce((s, o) => s + Math.min(Number(o.total || 0), Math.max(0, Number(o.total || 0) - orderDue(o))), 0),
+      average: live.length ? live.reduce((s, o) => s + Number(o.total || 0), 0) / live.length : 0,
+      overdue: live.filter(o => orderDue(o) > 0 && o.orderDate && (Date.now() - new Date(o.orderDate).getTime()) > 7 * 86400000).length
     };
   }, [orders, expenses]);
 
@@ -311,9 +319,11 @@ function Dashboard({ user }) {
   async function save(form) {
     setBusy(true);
     const qty = Number(form.quantity || 0), price = Number(form.unitPrice || 0);
+    const calculatedTotal = qty * price + Number(form.deliveryFee || 0);
+    const receivedAmount = /^paid full$/i.test(form.paymentStatus || "") ? calculatedTotal : Number(form.paidAmount || 0);
     const payload = {
       ...form, quantity: qty, unitPrice: price,
-      total: qty * price + Number(form.deliveryFee || 0),
+      total: calculatedTotal,
       itemsSubtotal: qty * price,
       productionCost: Number(form.productionCost || 0), deliveryFee: Number(form.deliveryFee || 0),
       otherCost: Number(form.otherCost || 0), paidAmount: Number(form.paidAmount || 0),
@@ -388,13 +398,18 @@ function Dashboard({ user }) {
 
     <section className="stats">
       <div className="stat"><span>Total orders</span><strong>{stats.count}</strong></div>
-      <div className="stat"><span>Sales / order value</span><strong>{money(stats.value)}</strong></div>
+      <div className="stat"><span>Collected payments</span><strong>{money(stats.collected)}</strong><small>Money received</small></div>
       <div className="stat"><span>Estimated profit</span><strong>{money(stats.profit)}</strong><small>After recorded costs</small></div>
       <div className="stat warn"><span>Payment due</span><strong>{money(stats.due)}</strong></div>
-      <div className="stat"><span>Active orders</span><strong>{stats.active}</strong></div>
+      <div className="stat"><span>Active orders</span><strong>{stats.active}</strong></div>\n      <div className="stat"><span>Average order value</span><strong>{money(stats.average)}</strong><small>Per non-cancelled order</small></div>\n      <div className="stat"><span>Over 7 days with due</span><strong>{stats.overdue}</strong><small>Follow-up recommended</small></div>
       <div className="stat"><span>Order-level costs</span><strong>{money(stats.costs)}</strong></div>
       <div className="stat"><span>Business expenses</span><strong>{money(stats.overhead)}</strong></div>
       <div className="stat"><span>Awaiting delivery</span><strong>{stats.delivery}</strong></div>
+    </section>
+
+    <section className="business-strip">
+      <div><span className="business-mark">🐝</span><div><strong>3D Bee · Custom 3D Printing</strong><small>Old Dhaka, Bangladesh · Personalized gifts · Prototypes · Educational & architectural models</small></div></div>
+      <div className="business-meta"><span>📦 {stats.count} orders</span><span>💰 {money(stats.due)} outstanding</span><span>🚚 {stats.delivery} awaiting delivery</span></div>
     </section>
 
     <section className="panel expensepanel">
@@ -432,7 +447,7 @@ function Dashboard({ user }) {
             <td className="pre">{o.customerDetails}</td>
             <td className="pre">{o.instructions}</td>
             <td>{o.quantity}</td>
-            <td><strong>{money(o.total)}</strong></td>
+            <td><strong className="due-cell">{money(orderDue(o))} due</strong><small>Bill {money(o.total)}</small></td>
             <td>{quickSelect(o, "paymentStatus", PAYMENTS, payTone)}</td>
             <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}</td>
             <td>{o.courierId}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td><td className="pre">{o.reference1}</td><td className="pre">{o.reference2}</td>
@@ -441,9 +456,9 @@ function Dashboard({ user }) {
           </tr>)}</tbody></table></div>
 
         <div className="cards">{visible.map(o => <article key={o.id} className="card" onClick={() => setSelected(o.id)}>
-          <div className="cardtop"><strong>{o.customerName || "—"}</strong><b>{money(o.total)}</b></div>
+          <div className="cardtop"><strong>{o.customerName || "—"}</strong><b className="due-cell">{money(orderDue(o))} due</b></div>
           <p>{o.bikeNumbers || "No bike number"} · Qty {o.quantity ?? "—"}</p>
-          <p className="clip">{o.customerDetails}</p>
+          <p className="clip">{o.customerDetails}</p>{o.instructions && <div className="card-note"><strong>✍️ Important note</strong><p>{o.instructions}</p></div>}
           {o.trackingUrl && <a href={o.trackingUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
           <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
             <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span></div>
