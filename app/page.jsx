@@ -452,7 +452,8 @@ function Dashboard({ user }) {
       <div className="stat"><span>Estimated profit</span><strong>{money(stats.profit)}</strong><small>After recorded costs</small></div>
       <div className="stat warn"><span>Payment due</span><strong>{money(stats.due)}</strong></div>
       <div className="stat"><span>Active orders</span><strong>{stats.active}</strong></div>
-      <div className="stat"><span>Average order value</span><strong>{money(stats.average)}</strong><small>Per non-cancelled order</small></div>\n      <div className="stat"><span>Over 7 days with due</span><strong>{stats.overdue}</strong><small>Follow-up recommended</small></div>
+      <div className="stat"><span>Average order value</span><strong>{money(stats.average)}</strong><small>Per non-cancelled order</small></div>
+      <div className="stat"><span>Over 7 days with due</span><strong>{stats.overdue}</strong><small>Follow-up recommended</small></div>
       <div className="stat"><span>Order-level costs</span><strong>{money(stats.costs)}</strong></div>
       <div className="stat"><span>Business expenses</span><strong>{money(stats.overhead)}</strong></div>
       <div className="stat"><span>Awaiting delivery</span><strong>{stats.delivery}</strong></div>
