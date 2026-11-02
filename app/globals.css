@@ -190,9 +190,3 @@ a{color:var(--blue);text-decoration:none;font-weight:600}a:hover{text-decoration
 .note-field textarea{background:var(--surface);border:1px solid var(--gold-dark);min-height:76px;font-weight:500;color:var(--ink)}
 .note-field textarea::placeholder{color:var(--muted);opacity:1}
 @media(max-width:540px){.note-field{grid-column:1 / -1}}
-
-.field-help{display:block;color:#748094;font-size:12px;margin-top:5px;line-height:1.45}
-.number-alert{grid-column:1/-1;display:flex;flex-direction:column;gap:5px;padding:11px 13px;border-radius:10px;font-size:13px;line-height:1.45}
-.number-alert.error{background:#fff0f0;border:1px solid #f1b5b5;color:#9b2525}
-.number-alert.warning{background:#fff8e8;border:1px solid #efd18c;color:#79520a}
-.number-alert strong{font-size:13px}

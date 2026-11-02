@@ -11,9 +11,7 @@ A live order-management dashboard for 3D Bee. Orders are stored in Firebase Real
 - Sales, outstanding payments, recorded costs and estimated profit dashboard
 - Production, delivery and miscellaneous cost fields; amount received tracking
 - Basic order status timeline for newly created and edited orders
-- Search every order field including bike-number item descriptions, filter, sort and CSV export
-- Multi-bike-number orders: one number per line or comma-separated; quantity is counted automatically
-- Exact duplicate bike numbers are blocked across orders and within an order; similar numbers are flagged while entering
+- Search every order field, filter, sort and CSV export
 - Responsive desktop table and mobile cards
 - Detail drawer includes extra fields stored on each order
 - Connection indicator and visible Firebase permission/configuration errors
