@@ -191,57 +191,13 @@ a{color:var(--blue);text-decoration:none;font-weight:600}a:hover{text-decoration
 .note-field textarea::placeholder{color:var(--muted);opacity:1}
 @media(max-width:540px){.note-field{grid-column:1 / -1}}
 
-
-/* 3D Bee finance-first dashboard */
-.due-cell{color:var(--red);font-weight:800;letter-spacing:-.2px}
-.due-summary{display:flex;flex-direction:column;gap:2px;color:var(--red);font-size:12px;font-weight:700}
-.due-summary strong{font-size:24px;line-height:1.15}
-.due-summary small{color:var(--muted);font-weight:500}
-.card-note,.drawer-note{padding:12px 14px;border:1px solid var(--gold-dark);background:var(--amber-bg);border-radius:12px;color:var(--ink)}
-.card-note strong,.drawer-note strong{display:block;color:var(--amber);font-size:12px;margin-bottom:5px}
-.card-note p,.drawer-note p{white-space:pre-wrap;color:var(--ink);font-weight:600;font-size:13px}
-.drawer-note{margin:0 0 2px}
-.business-strip{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 18px;margin:-5px 0 18px;background:linear-gradient(120deg,var(--surface),var(--amber-bg));border:1px solid var(--line);border-radius:16px}
-.business-strip>div:first-child{display:flex;align-items:center;gap:12px;min-width:0}
-.business-mark{display:grid;place-items:center;width:42px;height:42px;background:var(--gold);border-radius:13px;font-size:22px;flex:none}
-.business-strip strong,.business-strip small{display:block}
-.business-strip small{color:var(--muted);font-size:11px;margin-top:3px}
-.business-meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:11px;font-weight:700}
-.stat.warn{border:2px solid var(--red);background:linear-gradient(135deg,var(--red-bg),var(--surface))}
-.stat.warn strong{color:var(--red);font-size:29px}
-@media(max-width:700px){.business-strip{align-items:flex-start;flex-direction:column}.business-meta{gap:8px 14px}}
-
-/* 2026 dashboard polish: clearer hierarchy, focus states and manual theme control */
-:root{color-scheme:light dark;--radius:18px}
-html[data-theme="light"]{color-scheme:light;--bg:#f5f6fa;--surface:#fff;--ink:#171923;--muted:#697080;--line:#e5e8ef;--shadow:0 2px 5px #17203308,0 14px 34px #1720330b}
-html[data-theme="dark"]{color-scheme:dark;--bg:#0b1020;--surface:#121a2b;--ink:#edf1fa;--muted:#9aa7bd;--line:#26334a;--green:#5ed39a;--green-bg:#123324;--red:#ff8a80;--red-bg:#3a1714;--amber:#f6c343;--amber-bg:#3a2f0f;--blue:#8ab4ff;--blue-bg:#14284d;--violet:#b79cff;--violet-bg:#2a1f4d;--shadow:0 2px 8px #0004,0 18px 42px #0003}
-body{background-image:radial-gradient(ellipse at 12% 0%,#f6c34313,transparent 34%),radial-gradient(ellipse at 95% 8%,#6688ff0b,transparent 28%)}
-.shell{max-width:1760px;padding-top:30px}
-.top{position:relative;align-items:center}
-.brand{min-width:220px}
-.logo.sm{box-shadow:0 7px 18px #d9a51c30}
-h1{font-weight:800;letter-spacing:-1.1px}
-.eyebrow{letter-spacing:2px}
-.btn{min-height:40px;box-shadow:0 1px 2px #00000008}
-.btn:focus-visible,.icon:focus-visible,.chip:focus-visible,a:focus-visible{outline:3px solid #f6c34388;outline-offset:2px}
-.btn.primary{box-shadow:0 5px 14px #d9a51c2a}
-.stat{position:relative;overflow:hidden;transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
-.stat:hover{transform:translateY(-2px);box-shadow:0 8px 26px #0000000d}
-.stat strong{font-variant-numeric:tabular-nums}
-.panel{box-shadow:0 3px 14px #17203308}
-.toolbar input,.toolbar select{min-height:44px}
-.chips{padding-top:3px}
-.chip{transition:background .15s ease,color .15s ease,border-color .15s ease}
-.tablewrap{max-height:68vh}
-tbody tr:focus-within,tbody tr:hover{background:color-mix(in srgb,var(--gold) 7%,var(--surface))}
-.card{background:var(--surface);transition:transform .16s ease,border-color .16s ease,box-shadow .16s ease}
-.card:hover{transform:translateY(-2px);border-color:var(--gold-dark);box-shadow:var(--shadow)}
-.business-strip{box-shadow:0 4px 18px #17203308}
-.expenseitems>div{background:var(--surface)}
-.overlay{backdrop-filter:blur(8px)}
-.modal,.drawer{box-shadow:0 24px 80px #0005}
-input,textarea,select{transition:border-color .15s ease,box-shadow .15s ease}
-input::placeholder,textarea::placeholder{color:var(--muted);opacity:.8}
-.live{font-variant-numeric:tabular-nums}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
-@media(max-width:540px){.shell{padding:14px 12px}.top{gap:12px}.top .row{gap:7px}.top .row .btn{padding:9px 10px;font-size:12px}.brand{min-width:0}.stats{gap:9px}.stat{padding:14px}.stat span{font-size:11px}.stat strong{font-size:20px}.panel{padding:13px;border-radius:16px}}
+/* Payments, outstanding balance and courier controls */
+.payment-box{border:1px solid var(--line);border-radius:15px;padding:14px;background:var(--surface2,transparent);display:flex;flex-direction:column;gap:10px}
+.payment-summary{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:13px}
+.payment-summary>span{color:var(--muted)}
+.payment-summary strong{font-size:21px}
+.due-highlight{color:#c62828!important;font-weight:800!important}
+.paid-highlight{color:#16803c!important;font-weight:800!important}
+.payment-actions{display:grid;grid-template-columns:1fr auto;gap:8px}
+.payment-box>small{font-size:11px;color:var(--muted);line-height:1.5}
+@media(max-width:540px){.payment-actions{grid-template-columns:1fr}.payment-actions .btn{width:100%}}

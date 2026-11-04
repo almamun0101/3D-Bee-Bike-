@@ -1,14 +1,3 @@
-## Version 2.1.0 update
-
-- Added manual light/dark theme switching with a saved browser preference.
-- Added keyboard focus shortcuts for order search (`Ctrl+K` or `/`).
-- Corrected full-payment and unpaid-state calculations so the recorded paid amount and due amount stay in sync.
-- Added numeric validation before writing order values to Firebase.
-- Hardened CSV exports against spreadsheet formula injection.
-- Only allow HTTP/HTTPS tracking links from stored order data.
-- Improved responsive layout, focus visibility, reduced-motion support, and dashboard surfaces.
-- Marked the Next.js global error boundary as a client component.
-
 # 3D Bee Order Desk — Next.js + Firebase Realtime Database
 
 A live order-management dashboard for 3D Bee. Orders are stored in Firebase Realtime Database at `/3dbee v2/orders`; all signed-in dashboards subscribe to the same database path and receive changes in real time.
@@ -19,7 +8,9 @@ A live order-management dashboard for 3D Bee. Orders are stored in Firebase Real
 - Add, edit, delete and quick-update order/payment status
 - Realtime sync status and last-sync indicator
 - Delivery partner, parcel ID, tracking URL and delivery status
-- Finance-first dashboard: outstanding due, collected payments, estimated profit, average order value and overdue follow-ups\n- Prominent customization notes in order cards and details\n- 3D Bee business identity and operational overview strip
+- Sales, outstanding payments, recorded costs and estimated profit dashboard
+- Payment ledger with partial payments, delivery-charge-paid tracking, and automatically recalculated highlighted due
+- Steadfast Courier shipment creation through a server-side Netlify Function (credentials never exposed to the browser)
 - Production, delivery and miscellaneous cost fields; amount received tracking
 - Basic order status timeline for newly created and edited orders
 - Search every order field, filter, sort and CSV export
@@ -85,3 +76,14 @@ The app writes each new order under a Firebase-generated key and listens to `/3d
 - **Permission denied:** publish `database.rules.json` and confirm the signed-in account is authenticated.
 - **Connected but no orders:** check whether the existing records are actually under `/3dbee v2/orders`. If they are under another root, change `NEXT_PUBLIC_DB_ROOT` in `.env.local` and rebuild/restart.
 - **Offline indicator:** check internet connectivity and the Realtime Database URL/region.
+
+
+## Payment and Steadfast setup
+
+- Outstanding due is `total - paidAmount - deliveryChargePaidAmount`, never below zero.
+- Use **Record payment** in an order drawer for money received by your business. The app stores a payment-history entry and reduces due.
+- Use **Mark delivery charge paid** only when the customer has paid the courier/delivery fee separately. It deducts only the unpaid delivery-fee portion from due; it does not mark the product amount as paid.
+- Steadfast shipment creation sends the remaining due as `cod_amount`. Add the recipient phone and complete address in the order form first.
+- In Netlify → Site configuration → Environment variables, add `STEADFAST_API_KEY` and `STEADFAST_SECRET_KEY` from your Steadfast merchant account. These must be server-side variables (never prefix with `NEXT_PUBLIC_`). Redeploy after adding them.
+- The request is proxied by `netlify/functions/steadfast.mjs`; the browser never receives the API secret.
+- Existing orders remain compatible: missing `deliveryChargePaidAmount` is treated as zero, and existing `paidAmount` values are preserved.

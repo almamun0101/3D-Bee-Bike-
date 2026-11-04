@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
@@ -9,23 +9,24 @@ const STATUSES = ["Pending", "Processing", "Printing", "Ready to ship", "Shipped
 const PAYMENTS = ["Unpaid", "Pending", "Paid Advance", "Paid Full", "Cash On Delivery"];
 
 const LABELS = {
-  customerName: "Customer", bikeNumbers: "Bike number(s)", customerDetails: "Contact / address", deliveryArea: "Delivery area",
+  customerName: "Customer", courierRecipientPhone: "Courier phone", courierRecipientAddress: "Courier address", deliveryChargePaidAmount: "Delivery charge paid", bikeNumbers: "Bike number(s)", customerDetails: "Contact / address", deliveryArea: "Delivery area",
   paymentStatus: "Payment", courierId: "Tracking / parcel ID", courierName: "Courier", trackingUrl: "Tracking URL", deliveryStatus: "Delivery", productionCost: "Production cost", deliveryFee: "Delivery fee", otherCost: "Other cost", paidAmount: "Paid amount", instructions: "Customization",
   reference1: "Extra field 1", reference2: "Extra field 2", quantity: "Quantity",
   unitPrice: "Unit price", total: "Total", dueAmount: "Due amount", orderStatus: "Status", orderDate: "Order date",
   createdAt: "Created", updatedAt: "Last updated", id: "Order ID"
 };
 const KNOWN_ORDER = Object.keys(LABELS);
-const MONEY_KEYS = ["unitPrice", "total", "dueAmount", "productionCost", "deliveryFee", "otherCost", "paidAmount"];
+const MONEY_KEYS = ["unitPrice", "total", "dueAmount", "productionCost", "deliveryFee", "otherCost", "paidAmount", "deliveryChargePaidAmount"];
 
 const EMPTY = {
-  customerName: "", bikeNumbers: "", customerDetails: "", paymentStatus: "Unpaid",
+  customerName: "", courierRecipientPhone: "", courierRecipientAddress: "", deliveryChargePaidAmount: "0", bikeNumbers: "", customerDetails: "", paymentStatus: "Unpaid",
   courierId: "", courierName: "", trackingUrl: "", deliveryStatus: "Not shipped",
   instructions: "", reference1: "", reference2: "", quantity: "1",
   unitPrice: "250", total: "330", deliveryArea: "Inside Dhaka", productionCost: "0", deliveryFee: "80", otherCost: "0",
   paidAmount: "0", orderStatus: "Pending", orderDate: ""
 };
 
+const getDue = o => Math.max(0, Number(o?.total || 0) - Number(o?.paidAmount || (isPaid(o?.paymentStatus) ? o?.total : 0)) - Number(o?.deliveryChargePaidAmount || 0));
 const money = n => `৳${Number(n || 0).toLocaleString("en-BD")}`;
 const prettyKey = k => LABELS[k] || k.replace(/([A-Z])/g, " $1").replace(/^./, c => c.toUpperCase());
 const fmtDate = v => {
@@ -36,15 +37,8 @@ const fmtDate = v => {
 const statusTone = s => /deliver|complet/i.test(s) ? "green" : /cancel/i.test(s) ? "red" : /ship|ready/i.test(s) ? "violet" : /process|print/i.test(s) ? "blue" : "amber";
 const payTone = s => /^unpaid/i.test(s) ? "red" : /^paid/i.test(s) ? "green" : /cash/i.test(s) ? "blue" : "amber";
 const isPaid = s => /^paid/i.test(s || "");
-const orderDue = o => Math.max(0, Number(o.total || 0) - (o.paidAmount !== undefined && o.paidAmount !== null && o.paidAmount !== "" ? Number(o.paidAmount) : (isPaid(o.paymentStatus) ? Number(o.total || 0) : 0)));
 const isDone = s => /deliver|complet|cancel/i.test(s || "");
 const display = (k, v) => v === undefined || v === null || v === "" ? "—" : MONEY_KEYS.includes(k) ? money(v) : ["createdAt", "updatedAt"].includes(k) ? fmtDate(v) : typeof v === "object" ? JSON.stringify(v) : String(v);
-const safeTrackingUrl = value => {
-  try {
-    const url = new URL(String(value || ""));
-    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
-  } catch { return ""; }
-};
 
 /* ───────────── Login ───────────── */
 function Login() {
@@ -52,6 +46,7 @@ function Login() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [courierBusy, setCourierBusy] = useState(false);
   async function submit(e) {
     e.preventDefault(); setBusy(true); setErr("");
     try { await signInWithEmailAndPassword(getAuthInstance(), email.trim(), password); }
@@ -82,6 +77,7 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
     deliveryArea: initial.deliveryArea || (Number(initial.deliveryFee || 0) === 130 ? "Outside Dhaka" : Number(initial.deliveryFee || 0) === 80 ? "Inside Dhaka" : "No delivery"),
     deliveryFee: initial.deliveryFee ?? "80",
     paymentStatus: initial.paymentStatus || "Unpaid",
+    deliveryChargePaidAmount: initial.deliveryChargePaidAmount ?? "0",
     orderStatus: initial.orderStatus || "Pending"
   }));
   const [showMore, setShowMore] = useState(false);
@@ -92,13 +88,6 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
     if (name === "deliveryArea") {
       next.deliveryFee = value === "Inside Dhaka" ? "80" : value === "Outside Dhaka" ? "130" : "0";
       next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
-    }
-    if (name === "paymentStatus") {
-      if (/^paid full$/i.test(value)) {
-        next.paidAmount = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
-      } else if (/^unpaid$/i.test(value)) {
-        next.paidAmount = "0";
-      }
     }
     setForm(next);
   }
@@ -114,6 +103,8 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
       <div className="grid ordergrid">
         <label>Customer name *<input {...f("customerName", { required: true, autoFocus: true, placeholder: "Customer name" })} /></label>
         <label>Phone / address<textarea {...f("customerDetails", { rows: 2, placeholder: "Phone number and delivery address" })} /></label>
+        <label>Courier recipient phone<input {...f("courierRecipientPhone", { placeholder: "01XXXXXXXXX" })} /></label>
+        <label className="wide">Courier delivery address<input {...f("courierRecipientAddress", { placeholder: "House, road, area, district" })} /></label>
         <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
         <label className="wide">Item / order details<input {...f("bikeNumbers", { placeholder: "e.g. Custom keychain, lithophane, model…" })} /></label>
         <label className="wide note-field">Customization notes<textarea {...f("instructions", { rows: 3, placeholder: "✍️ Add important notes: color, size, text, design, customer requests…" })} /></label>
@@ -124,7 +115,8 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
         <label>Delivery cost (৳)<input value={money(form.deliveryFee)} readOnly /></label>
         <label>Total incl. delivery (৳)<input value={money(total)} readOnly /></label>
         <label>Amount paid (৳)<input {...f("paidAmount", { type: "number", min: 0, step: "0.01" })} /></label>
-        <label>Due amount (৳)<input value={money(Math.max(0, total - Number(form.paidAmount || 0)))} readOnly /></label>
+        <label>Delivery charge paid (৳)<input {...f("deliveryChargePaidAmount", { type: "number", min: 0, max: Number(form.deliveryFee || 0), step: "0.01" })} /></label>
+        <label>Due amount (৳)<input value={money(Math.max(0, total - Number(form.paidAmount || 0) - Number(form.deliveryChargePaidAmount || 0)))} readOnly /></label>
         <label>Payment<select {...f("paymentStatus")}>{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
         <label>Order status<select {...f("orderStatus")}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select></label>
         <label>Order date<input {...f("orderDate", { type: "date" })} /></label>
@@ -153,7 +145,10 @@ function OrderModal({ initial, editing, onClose, onSave, busy }) {
 }
 
 /* ───────────── Detail drawer: shows EVERY field ───────────── */
-function Drawer({ order, onClose, onEdit, onDelete, onQuick }) {
+function Drawer({ order, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy }) {
+  const [paymentInput, setPaymentInput] = useState("");
+  const due = getDue(order);
+  const deliveryRemaining = Math.max(0, Number(order.deliveryFee || 0) - Number(order.deliveryChargePaidAmount || 0));
   const keys = [...KNOWN_ORDER.filter(k => k === "id" || k in order), ...Object.keys(order).filter(k => !KNOWN_ORDER.includes(k)).sort()];
   return <div className="overlay right" onMouseDown={e => e.target === e.currentTarget && onClose()}>
     <aside className="drawer">
@@ -164,7 +159,7 @@ function Drawer({ order, onClose, onEdit, onDelete, onQuick }) {
       <div className="drawertags">
         <span className={`pill ${statusTone(order.orderStatus)}`}>{order.orderStatus || "—"}</span>
         <span className={`pill ${payTone(order.paymentStatus)}`}>{order.paymentStatus || "—"}</span>
-        <strong className="big">{money(orderDue(order))} due</strong>
+        <strong className="big">{money(order.total)}</strong>
       </div>
       <div className="quick">
         <label>Status<select value={order.orderStatus || ""} onChange={e => onQuick(order.id, "orderStatus", e.target.value)}>
@@ -172,8 +167,19 @@ function Drawer({ order, onClose, onEdit, onDelete, onQuick }) {
         <label>Payment<select value={order.paymentStatus || ""} onChange={e => onQuick(order.id, "paymentStatus", e.target.value)}>
           {!PAYMENTS.includes(order.paymentStatus) && order.paymentStatus && <option>{order.paymentStatus}</option>}{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
       </div>
-      {safeTrackingUrl(order.trackingUrl) && <a className="btn" href={safeTrackingUrl(order.trackingUrl)} target="_blank" rel="noopener noreferrer">Track parcel ↗</a>}
-      {order.instructions && <section className="drawer-note"><strong>✍️ Important customization note</strong><p>{order.instructions}</p></section>}
+      <section className="payment-box">
+        <div className="payment-summary"><span>Outstanding due</span><strong className={due > 0 ? "due-highlight" : "paid-highlight"}>{money(due)}</strong></div>
+        <div className="payment-summary"><span>Paid to business</span><b>{money(order.paidAmount || 0)}</b></div>
+        <div className="payment-summary"><span>Delivery charge paid separately</span><b>{money(order.deliveryChargePaidAmount || 0)}</b></div>
+        <form className="payment-actions" onSubmit={e => { e.preventDefault(); onRecordPayment(order.id, paymentInput); setPaymentInput(""); }}>
+          <input type="number" min="0.01" step="0.01" max={due} value={paymentInput} onChange={e => setPaymentInput(e.target.value)} placeholder="Payment amount (৳)" />
+          <button className="btn primary" disabled={!paymentInput || Number(paymentInput) <= 0 || Number(paymentInput) > due}>＋ Record payment</button>
+        </form>
+        {deliveryRemaining > 0 && <button className="btn" onClick={() => onDeliveryChargePaid(order.id)}>Mark delivery charge paid ({money(deliveryRemaining)})</button>}
+        <button className="btn" onClick={() => onCreateCourier(order)} disabled={courierBusy}>{courierBusy ? "Creating courier order…" : "Create Steadfast shipment"}</button>
+        <small>Steadfast COD will be set to the remaining due after recorded payments and separately paid delivery charge.</small>
+      </section>
+      {order.trackingUrl && <a className="btn" href={order.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a>}
       <dl className="fields">
         {keys.map(k => <div key={k}><dt>{prettyKey(k)}</dt><dd>{display(k, order[k])}</dd></div>)}
       </dl>
@@ -207,24 +213,8 @@ function Dashboard({ user }) {
   const [modal, setModal] = useState(null);   // null | { id?, values }
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [courierBusy, setCourierBusy] = useState(false);
   const [toast, setToast] = useState(null);
-  const [theme, setTheme] = useState("system");
-  const searchRef = useRef(null);
-
-  useEffect(() => {
-    try {
-      const saved = window.localStorage.getItem("3dbee-theme");
-      if (saved === "light" || saved === "dark") setTheme(saved);
-    } catch { /* Keep the system theme when browser storage is unavailable. */ }
-  }, []);
-
-  useEffect(() => {
-    if (theme === "system") delete document.documentElement.dataset.theme;
-    else document.documentElement.dataset.theme = theme;
-    if (theme !== "system") {
-      try { window.localStorage.setItem("3dbee-theme", theme); } catch { /* Theme still applies for this session. */ }
-    }
-  }, [theme]);
 
   const notify = useCallback((text, bad) => {
     setToast({ text, bad });
@@ -265,11 +255,7 @@ function Dashboard({ user }) {
   }, [toast]);
 
   useEffect(() => {
-    const onKey = e => {
-      if (e.key === "Escape") { setModal(null); setSelected(null); }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === "/" && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) { e.preventDefault(); searchRef.current?.focus(); }
-    };
+    const onKey = e => { if (e.key === "Escape") { setModal(null); setSelected(null); } };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -281,15 +267,12 @@ function Dashboard({ user }) {
     return {
       count: orders.length,
       value: live.reduce((s, o) => s + Number(o.total || 0), 0),
-      due: live.reduce((s, o) => s + orderDue(o), 0),
+      due: live.reduce((s, o) => s + getDue(o), 0),
       costs: live.reduce((s, o) => s + Number(o.productionCost || 0) + Number(o.deliveryFee || 0) + Number(o.otherCost || 0), 0),
       overhead: expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
       profit: live.reduce((s, o) => s + Number(o.total || 0) - Number(o.productionCost || 0) - Number(o.deliveryFee || 0) - Number(o.otherCost || 0), 0) - expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
       active: orders.filter(o => !isDone(o.orderStatus)).length,
-      delivery: live.filter(o => !/delivered/i.test(o.deliveryStatus || "") && !/cancel/i.test(o.orderStatus || "")).length,
-      collected: live.reduce((s, o) => s + Math.min(Number(o.total || 0), Math.max(0, Number(o.total || 0) - orderDue(o))), 0),
-      average: live.length ? live.reduce((s, o) => s + Number(o.total || 0), 0) / live.length : 0,
-      overdue: live.filter(o => orderDue(o) > 0 && o.orderDate && (Date.now() - new Date(o.orderDate).getTime()) > 7 * 86400000).length
+      delivery: live.filter(o => !/delivered/i.test(o.deliveryStatus || "") && !/cancel/i.test(o.orderStatus || "")).length
     };
   }, [orders, expenses]);
 
@@ -337,12 +320,7 @@ function Dashboard({ user }) {
       const now = new Date().toISOString();
       const current = orders.find(o => o.id === id);
       const patch = { [field]: value, updatedAt: now };
-      if (field === "paymentStatus") {
-        const paid = /^paid full$/i.test(value) ? Number(current?.total || 0)
-          : /^unpaid$/i.test(value) ? 0 : Number(current?.paidAmount || 0);
-        patch.paidAmount = paid;
-        patch.dueAmount = Math.max(0, Number(current?.total || 0) - paid);
-      }
+      if (field === "paymentStatus" && /^paid full$/i.test(value)) patch.paidAmount = Math.max(0, Number(current?.total || 0) - Number(current?.deliveryChargePaidAmount || 0));
       if (field === "orderStatus" && current?.orderStatus !== value) {
         const timeline = Array.isArray(current?.timeline) ? current.timeline : [];
         patch.timeline = [...timeline, { status: value, note: "Order status changed", at: now }];
@@ -355,23 +333,14 @@ function Dashboard({ user }) {
   async function save(form) {
     setBusy(true);
     const qty = Number(form.quantity || 0), price = Number(form.unitPrice || 0);
-    const deliveryFee = Number(form.deliveryFee || 0);
-    const receivedInput = Number(form.paidAmount || 0);
-    const costValues = [form.productionCost, form.otherCost].map(v => Number(v || 0));
-    if (!Number.isInteger(qty) || qty < 1 || ![price, deliveryFee, receivedInput, ...costValues].every(v => Number.isFinite(v) && v >= 0)) {
-      notify("Check quantity and amounts. They must be valid non-negative numbers.", true);
-      setBusy(false);
-      return;
-    }
-    const calculatedTotal = qty * price + deliveryFee;
-    const receivedAmount = /^paid full$/i.test(form.paymentStatus || "") ? calculatedTotal : receivedInput;
     const payload = {
       ...form, quantity: qty, unitPrice: price,
-      total: calculatedTotal,
+      total: qty * price + Number(form.deliveryFee || 0),
       itemsSubtotal: qty * price,
       productionCost: Number(form.productionCost || 0), deliveryFee: Number(form.deliveryFee || 0),
-      otherCost: Number(form.otherCost || 0), paidAmount: receivedAmount,
-      dueAmount: Math.max(0, calculatedTotal - receivedAmount),
+      otherCost: Number(form.otherCost || 0), paidAmount: Number(form.paidAmount || 0),
+      deliveryChargePaidAmount: Math.min(Number(form.deliveryFee || 0), Number(form.deliveryChargePaidAmount || 0)),
+      dueAmount: Math.max(0, qty * price + Number(form.deliveryFee || 0) - Number(form.paidAmount || 0) - Number(form.deliveryChargePaidAmount || 0)),
       updatedAt: new Date().toISOString()
     };
     try {
@@ -396,6 +365,81 @@ function Dashboard({ user }) {
     finally { setBusy(false); }
   }
 
+  async function recordPayment(id, rawAmount) {
+    const amount = Number(rawAmount);
+    const order = orders.find(o => o.id === id);
+    if (!order || !Number.isFinite(amount) || amount <= 0 || amount > getDue(order)) return notify("Enter a valid payment not greater than the outstanding due.", true);
+    const now = new Date().toISOString();
+    const payment = { amount, type: "Customer payment", at: now };
+    const history = Array.isArray(order.paymentHistory) ? order.paymentHistory : [];
+    const paidAmount = Number(order.paidAmount || 0) + amount;
+    const total = Number(order.total || 0);
+    const due = Math.max(0, total - paidAmount - Number(order.deliveryChargePaidAmount || 0));
+    try {
+      await update(ref(getDb(), `${DB_ROOT}/orders/${id}`), {
+        paidAmount, dueAmount: due, paymentStatus: due <= 0 ? "Paid Full" : "Paid Advance",
+        paymentHistory: [...history, payment], updatedAt: now
+      });
+      notify(`Payment ${money(amount)} recorded. Remaining due: ${money(due)}`);
+    } catch (e) { notify("Could not record payment: " + e.message, true); }
+  }
+
+  async function markDeliveryChargePaid(id) {
+    const order = orders.find(o => o.id === id);
+    if (!order) return;
+    const fee = Number(order.deliveryFee || 0);
+    const already = Number(order.deliveryChargePaidAmount || 0);
+    const amount = Math.max(0, fee - already);
+    if (!amount) return notify("Delivery charge is already marked as paid.");
+    const now = new Date().toISOString();
+    const history = Array.isArray(order.paymentHistory) ? order.paymentHistory : [];
+    const deliveryChargePaidAmount = already + amount;
+    const due = Math.max(0, Number(order.total || 0) - Number(order.paidAmount || 0) - deliveryChargePaidAmount);
+    try {
+      await update(ref(getDb(), `${DB_ROOT}/orders/${id}`), {
+        deliveryChargePaidAmount, dueAmount: due,
+        paymentHistory: [...history, { amount, type: "Delivery charge paid separately", at: now }],
+        updatedAt: now
+      });
+      notify(`Delivery charge ${money(amount)} deducted from due. Remaining due: ${money(due)}`);
+    } catch (e) { notify("Could not update delivery payment: " + e.message, true); }
+  }
+
+  async function createSteadfastOrder(order) {
+    if (!order) return;
+    const phone = String(order.courierRecipientPhone || (String(order.customerDetails || "").match(/01[3-9]\d{8}/) || [""])[0]).trim();
+    const address = String(order.courierRecipientAddress || order.customerDetails || "").trim();
+    if (!phone || !address) return notify("Add the recipient phone and full courier address in Edit order first.", true);
+    const cod = getDue(order);
+    setCourierBusy(true);
+    try {
+      const currentUser = getAuthInstance().currentUser;
+      if (!currentUser) throw new Error("Please sign in before creating a Steadfast shipment.");
+      const idToken = await currentUser.getIdToken();
+      const response = await fetch("/.netlify/functions/steadfast", {
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+        body: JSON.stringify({
+          invoice: `3DBEE-${order.id}`, recipient_name: order.customerName || "Customer",
+          recipient_phone: phone, recipient_address: address, cod_amount: cod,
+          note: order.instructions || ""
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.status === 400 || result.status === 401) throw new Error(result.message || result.error || `Steadfast request failed (${response.status})`);
+      const consignment = result.consignment || result.data || result;
+      const consignmentId = consignment.consignment_id || consignment.id || consignment.tracking_code || "";
+      const trackingCode = consignment.tracking_code || consignment.consignment_id || "";
+      await update(ref(getDb(), `${DB_ROOT}/orders/${order.id}`), {
+        courierName: "Steadfast", ...(consignmentId ? { courierId: String(consignmentId) } : {}),
+        ...(trackingCode ? { steadfastTrackingCode: String(trackingCode) } : {}),
+        steadfastResponse: result, steadfastCodAmount: cod,
+        deliveryStatus: "Ready for pickup", updatedAt: new Date().toISOString()
+      });
+      notify(`Steadfast shipment created${consignmentId ? ` · ID ${consignmentId}` : ""}. COD: ${money(cod)}`);
+    } catch (e) { notify("Steadfast error: " + e.message, true); }
+    finally { setCourierBusy(false); }
+  }
+
   async function removeOrder(id) {
     if (!confirm("Delete this order? This cannot be undone.")) return;
     try {
@@ -412,12 +456,7 @@ function Dashboard({ user }) {
 
   function exportCsv() {
     const keys = [...KNOWN_ORDER, ...[...new Set(orders.flatMap(o => Object.keys(o)))].filter(k => !KNOWN_ORDER.includes(k))];
-    const esc = v => {
-      const value = String(v ?? "");
-      // Prefix formula-like values so exported CSVs are safer to open in spreadsheets.
-      const safe = /^[\s]*[=+\-@]/.test(value) ? `'${value}` : value;
-      return `"${safe.replace(/"/g, '""')}"`;
-    };
+    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
     const csv = [keys.map(prettyKey).map(esc).join(","), ...visible.map(o => keys.map(k => esc(o[k])).join(","))].join("\n");
     const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
     const a = Object.assign(document.createElement("a"), { href: url, download: `3d-bee-orders-${new Date().toISOString().slice(0, 10)}.csv` });
@@ -437,7 +476,6 @@ function Dashboard({ user }) {
         <div><div className="eyebrow">3D BEE</div><h1>Order Desk</h1></div></div>
       <div className="row wrap">
         <span className={`live ${online ? "on" : ""}`}><i />{online ? "Live" : "Offline"}</span>
-        <button className="btn" onClick={() => setTheme(current => current === "dark" ? "light" : "dark")} aria-label="Toggle color theme" title="Toggle light / dark theme">{theme === "dark" ? "☀ Light" : "☾ Dark"}</button>
         <button className="btn" onClick={exportCsv} disabled={!orders.length}>⬇ Export CSV</button>
         <button className="btn primary" onClick={() => setModal({ values: EMPTY })}>＋ New order</button>
         {REQUIRE_LOGIN && <button className="btn ghost" onClick={() => signOut(getAuthInstance())} title={user?.email}>Sign out</button>}
@@ -448,20 +486,13 @@ function Dashboard({ user }) {
 
     <section className="stats">
       <div className="stat"><span>Total orders</span><strong>{stats.count}</strong></div>
-      <div className="stat"><span>Collected payments</span><strong>{money(stats.collected)}</strong><small>Money received</small></div>
+      <div className="stat"><span>Sales / order value</span><strong>{money(stats.value)}</strong></div>
       <div className="stat"><span>Estimated profit</span><strong>{money(stats.profit)}</strong><small>After recorded costs</small></div>
       <div className="stat warn"><span>Payment due</span><strong>{money(stats.due)}</strong></div>
       <div className="stat"><span>Active orders</span><strong>{stats.active}</strong></div>
-      <div className="stat"><span>Average order value</span><strong>{money(stats.average)}</strong><small>Per non-cancelled order</small></div>
-      <div className="stat"><span>Over 7 days with due</span><strong>{stats.overdue}</strong><small>Follow-up recommended</small></div>
       <div className="stat"><span>Order-level costs</span><strong>{money(stats.costs)}</strong></div>
       <div className="stat"><span>Business expenses</span><strong>{money(stats.overhead)}</strong></div>
       <div className="stat"><span>Awaiting delivery</span><strong>{stats.delivery}</strong></div>
-    </section>
-
-    <section className="business-strip">
-      <div><span className="business-mark">🐝</span><div><strong>3D Bee · Custom 3D Printing</strong><small>Old Dhaka, Bangladesh · Personalized gifts · Prototypes · Educational & architectural models</small></div></div>
-      <div className="business-meta"><span>📦 {stats.count} orders</span><span>💰 {money(stats.due)} outstanding</span><span>🚚 {stats.delivery} awaiting delivery</span></div>
     </section>
 
     <section className="panel expensepanel">
@@ -477,7 +508,7 @@ function Dashboard({ user }) {
 
     <section className="panel">
       <div className="toolbar">
-        <input ref={searchRef} className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search any field — name, bike, phone, courier, notes…" aria-label="Search orders" />
+        <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search any field — name, bike, phone, courier, notes…" />
         <select value={payFilter} onChange={e => setPayFilter(e.target.value)} aria-label="Payment filter">
           <option value="All">All payments</option>{PAYMENTS.map(p => <option key={p}>{p}</option>)}</select>
         <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
@@ -492,26 +523,27 @@ function Dashboard({ user }) {
       {!loaded ? <div className="empty">Loading orders…</div> : !visible.length ?
         <div className="empty">{orders.length ? "No orders match your filters." : <>No orders found at <code>/{DB_ROOT}/orders</code>. Add one or check the database path and rules.</>}</div> : <>
         <div className="tablewrap"><table>
-          <thead><tr><th>Customer</th><th>Bike no.</th><th>Contact / address</th><th>Customization</th><th>Qty</th><th>Total</th><th>Payment</th><th>Status</th><th>Courier</th><th>Extra 1</th><th>Extra 2</th><th>Created</th><th>Updated</th><th /></tr></thead>
+          <thead><tr><th>Customer</th><th>Bike no.</th><th>Contact / address</th><th>Customization</th><th>Qty</th><th>Total</th><th>Due</th><th>Payment</th><th>Status</th><th>Courier</th><th>Extra 1</th><th>Extra 2</th><th>Created</th><th>Updated</th><th /></tr></thead>
           <tbody>{visible.map(o => <tr key={o.id} onClick={() => setSelected(o.id)}>
             <td><strong>{o.customerName || "—"}</strong><small>{o.orderDate}</small></td>
             <td className="pre">{o.bikeNumbers}</td>
             <td className="pre">{o.customerDetails}</td>
             <td className="pre">{o.instructions}</td>
             <td>{o.quantity}</td>
-            <td><strong className="due-cell">{money(orderDue(o))} due</strong><small>Bill {money(o.total)}</small></td>
+            <td><strong>{money(o.total)}</strong></td><td><strong className={getDue(o) > 0 ? "due-highlight" : "paid-highlight"}>{money(getDue(o))}</strong></td>
             <td>{quickSelect(o, "paymentStatus", PAYMENTS, payTone)}</td>
             <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}</td>
-            <td>{o.courierId}{safeTrackingUrl(o.trackingUrl) && <small><a href={safeTrackingUrl(o.trackingUrl)} target="_blank" rel="noopener noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td><td className="pre">{o.reference1}</td><td className="pre">{o.reference2}</td>
+            <td>{o.courierId}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td><td className="pre">{o.reference1}</td><td className="pre">{o.reference2}</td>
             <td className="nowrap">{fmtDate(o.createdAt)}</td><td className="nowrap">{fmtDate(o.updatedAt)}</td>
             <td><button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
           </tr>)}</tbody></table></div>
 
         <div className="cards">{visible.map(o => <article key={o.id} className="card" onClick={() => setSelected(o.id)}>
-          <div className="cardtop"><strong>{o.customerName || "—"}</strong><b className="due-cell">{money(orderDue(o))} due</b></div>
+          <div className="cardtop"><strong>{o.customerName || "—"}</strong><b>{money(o.total)}</b></div>
           <p>{o.bikeNumbers || "No bike number"} · Qty {o.quantity ?? "—"}</p>
-          <p className="clip">{o.customerDetails}</p>{o.instructions && <div className="card-note"><strong>✍️ Important note</strong><p>{o.instructions}</p></div>}
-          {safeTrackingUrl(o.trackingUrl) && <a href={safeTrackingUrl(o.trackingUrl)} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
+          <p className={getDue(o) > 0 ? "due-highlight" : "paid-highlight"}>Due: {money(getDue(o))}</p>
+          <p className="clip">{o.customerDetails}</p>
+          {o.trackingUrl && <a href={o.trackingUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
           <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
             <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span></div>
         </article>)}</div></>}
@@ -519,7 +551,7 @@ function Dashboard({ user }) {
     <footer>3D Bee Order Desk · live Firebase sync · {visible.length} of {orders.length} orders shown · {lastSynced ? `Last sync ${lastSynced.toLocaleTimeString()}` : "Waiting for sync"}</footer>
 
     {modal && <OrderModal initial={modal.values} editing={!!modal.id} busy={busy} onClose={() => setModal(null)} onSave={save} />}
-    {selectedOrder && <Drawer order={selectedOrder} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} />}
+    {selectedOrder && <Drawer order={selectedOrder} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} onRecordPayment={recordPayment} onDeliveryChargePaid={markDeliveryChargePaid} onCreateCourier={createSteadfastOrder} courierBusy={courierBusy} />}
     {toast && <div className={`toast ${toast.bad ? "bad" : ""}`} role="status">{toast.text}</div>}
   </div>;
 }
