@@ -87,3 +87,27 @@ The app writes each new order under a Firebase-generated key and listens to `/3d
 - In Netlify → Site configuration → Environment variables, add `STEADFAST_API_KEY` and `STEADFAST_SECRET_KEY` from your Steadfast merchant account. These must be server-side variables (never prefix with `NEXT_PUBLIC_`). Redeploy after adding them.
 - The request is proxied by `netlify/functions/steadfast.mjs`; the browser never receives the API secret.
 - Existing orders remain compatible: missing `deliveryChargePaidAmount` is treated as zero, and existing `paidAmount` values are preserved.
+
+
+## Courier tab, auto-sync and Analytics (new)
+- Order er **Tracking / parcel ID** = Steadfast ID. Dashboard ta oi ID diye Steadfast e match kore status niye ashe (`steadfastStatus`, `deliveryStatus`) ar Firebase e save kore. Delivered hole order status auto "Delivered" hoy.
+- **Courier tab**: koto parcel courier e gelo (courier wise), on the way / delivered / cancelled, COD kothay, 5+ din atke thaka parcel, ID mile nai emon order, Steadfast payments (COD, charge, received, balance) ar customer name match.
+- **Analytics tab**: sales, profit, margin, due, daily/weekly/monthly chart, status, courier performance, weekday, area, expenses, top customers, smart insights.
+- Auto-sync: dashboard khola thakle prottek 15 min e on-the-way parcel gulo sync hoy (Courier tab e off kora jay).
+- New Netlify function: `netlify/functions/steadfast-api.mjs` (status, balance, payments). Same Netlify env vars (`STEADFAST_API_KEY`, `STEADFAST_SECRET_KEY`) lage.
+
+## Local run with Steadfast sync
+`npm run dev` now starts the Steadfast functions together with Next.js (plain `npm run dev:next` has none and gives 404):
+
+```
+npm install
+npm run dev
+```
+This starts Next.js on http://localhost:3000 and the Steadfast functions on http://localhost:8888. Put `STEADFAST_API_KEY` and `STEADFAST_SECRET_KEY` in `.env.local` (restart after changing).
+
+## Auto rules (Steadfast sync)
+- **Delivered** (customer received): COD collected -> paid = full, due = 0, payment "Paid Full", order "Delivered", activity log added. Partial delivery is NOT auto-settled (check COD manually).
+- **Cancelled / returned by Steadfast**: order status becomes "Returned". Loss = production cost + other cost + courier charge. Shown in Courier tab (Returns & loss), Orders stats and Analytics; revenue of returned parcels is not counted.
+- **Courier cost check**: your assumed cost (order "Delivery cost") vs Steadfast's real charge. Red "▲ +৳50 beshi" when Steadfast charged more, green when less.
+- Payment dropdown: choosing **Delivery Charge Paid** fills the delivery charge paid amount automatically and recalculates due.
+- Bill / Paid / Due are shown together in one cell.

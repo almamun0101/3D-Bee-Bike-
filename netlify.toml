@@ -3,6 +3,9 @@
   command = "npm run build"
   publish = "out"
 
+[functions]
+  node_bundler = "esbuild"
+
 [build.environment]
   NODE_VERSION = "20"
   NPM_FLAGS = "--no-audit --no-fund"

@@ -3,9 +3,11 @@
   "version": "2.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "node scripts/dev-all.mjs",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "dev:all": "node scripts/dev-all.mjs",
+    "dev:next": "next dev"
   },
   "dependencies": {
     "firebase": "^11.6.0",

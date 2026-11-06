@@ -36,3 +36,11 @@ Copy `.env.local.example` to `.env.local`, fill in the Firebase API key, then ru
 npm install
 npm run dev
 ```
+
+## Steadfast sync (Courier tab)
+Add `STEADFAST_API_KEY` and `STEADFAST_SECRET_KEY` (server-side) in Netlify, then redeploy. The function `steadfast-api` verifies the Firebase sign-in before calling Steadfast. Optional: `STEADFAST_BASE_URL`, `STEADFAST_ALLOWED_EMAIL`.
+
+### "Request failed (404)" on Steadfast sync
+The function is not deployed. Check: open `https://YOUR-SITE.netlify.app/.netlify/functions/steadfast-api` in the browser. You should see `{"ok":true,...}`.
+- Deploy with **Git (GitHub) or Netlify CLI** (`npx netlify deploy --prod --build`). Drag-and-drop of only the `out` folder does NOT upload `netlify/functions`.
+- Local testing: `npm run dev` (plain `npm run dev` has no Netlify functions).
