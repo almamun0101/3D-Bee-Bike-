@@ -7,12 +7,17 @@
     "build": "next build",
     "start": "next start",
     "dev:all": "node scripts/dev-all.mjs",
-    "dev:next": "next dev"
+    "dev:next": "next dev",
+    "deploy": "npx netlify-cli deploy --prod --build",
+    "deploy:preview": "npx netlify-cli deploy --build"
   },
   "dependencies": {
     "firebase": "^11.6.0",
     "next": "^15.2.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

@@ -4,22 +4,21 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
-import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, num, pick } from "./lib/shared";
+import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
 import SfPill, { ChargeTag } from "./components/SfPill";
 import BillCell from "./components/BillCell";
 import Courier from "./components/Courier";
 import Analytics from "./components/Analytics";
+import OrderModal from "./components/OrderModal";
 
-const STATUSES = ["Pending", "Processing", "Printing", "Ready to ship", "Shipped", "Delivered", "Completed", "Returned", "Cancelled"];
-const PAYMENTS = ["Unpaid", "Pending", "Paid Advance", "Paid Full", "Delivery Charge Paid", "Cash On Delivery"];
 
 const LABELS = {
   customerName: "Customer", courierRecipientPhone: "Courier phone", courierRecipientAddress: "Courier address", deliveryChargePaidAmount: "Delivery charge paid", bikeNumbers: "Bike number(s)", customerDetails: "Contact / address", deliveryArea: "Delivery area",
   paymentStatus: "Payment", courierId: "Tracking / parcel ID", courierName: "Courier", trackingUrl: "Tracking URL", deliveryStatus: "Delivery", productionCost: "Production cost", deliveryFee: "Delivery fee", otherCost: "Other cost", paidAmount: "Paid amount", instructions: "Customization",
   reference1: "Extra field 1", reference2: "Extra field 2", quantity: "Quantity",
   unitPrice: "Unit price", total: "Total", dueAmount: "Due amount", orderStatus: "Status", orderDate: "Order date",
-  createdAt: "Created", updatedAt: "Last updated", id: "Order ID"
+  createdAt: "Created", updatedAt: "Last updated", id: "Order ID", serial: "Serial no.", itemsSubtotal: "Items subtotal"
 };
 const KNOWN_ORDER = Object.keys(LABELS);
 const MONEY_KEYS = ["unitPrice", "total", "dueAmount", "productionCost", "deliveryFee", "otherCost", "paidAmount", "deliveryChargePaidAmount"];
@@ -63,95 +62,25 @@ function Login() {
   </main>;
 }
 
-/* ───────────── Order form (modal) ───────────── */
-function OrderModal({ initial, editing, onClose, onSave, busy }) {
-  const [form, setForm] = useState(() => ({
-    ...initial,
-    orderDate: initial.orderDate || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }),
-    quantity: initial.quantity || "1",
-    unitPrice: initial.unitPrice || "250",
-    total: initial.total || String((Number(initial.quantity || 1) || 1) * (Number(initial.unitPrice || 250) || 0)),
-    deliveryArea: initial.deliveryArea || (Number(initial.deliveryFee || 0) === 130 ? "Outside Dhaka" : Number(initial.deliveryFee || 0) === 80 ? "Inside Dhaka" : "No delivery"),
-    deliveryFee: initial.deliveryFee ?? "80",
-    paymentStatus: initial.paymentStatus || "Unpaid",
-    deliveryChargePaidAmount: initial.deliveryChargePaidAmount ?? "0",
-    orderStatus: initial.orderStatus || "Pending"
-  }));
-  const [showMore, setShowMore] = useState(false);
-  function change(e) {
-    const { name, value } = e.target;
-    const next = { ...form, [name]: value };
-    if (name === "quantity" || name === "unitPrice") next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
-    if (name === "paymentStatus" && value === "Delivery Charge Paid") next.deliveryChargePaidAmount = String(Number(next.deliveryFee || 0));
-    if (name === "deliveryArea") {
-      next.deliveryFee = value === "Inside Dhaka" ? "80" : value === "Outside Dhaka" ? "130" : "0";
-      next.total = String((Number(next.quantity) || 0) * (Number(next.unitPrice) || 0) + Number(next.deliveryFee || 0));
-    }
-    setForm(next);
-  }
-  const f = (name, props = {}) => ({ name, value: form[name] ?? "", onChange: change, ...props });
-  const itemSubtotal = (Number(form.quantity) || 0) * (Number(form.unitPrice) || 0);
-  const total = itemSubtotal + Number(form.deliveryFee || 0);
-  return <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-    <form className="modal ordermodal" onSubmit={e => { e.preventDefault(); onSave(form); }}>
-      <div className="modalhead">
-        <div><h2>{editing ? "Edit order" : "New order"}</h2><p>{editing ? "Update the order details." : "Add the essentials now. You can fill in the rest later."}</p></div>
-        <button type="button" className="icon" onClick={onClose} aria-label="Close">✕</button>
-      </div>
-      <div className="grid ordergrid">
-        <label>Customer name *<input {...f("customerName", { required: true, autoFocus: true, placeholder: "Customer name" })} /></label>
-        <label>Phone / address<textarea {...f("customerDetails", { rows: 2, placeholder: "Phone number and delivery address" })} /></label>
-        <label>Courier recipient phone<input {...f("courierRecipientPhone", { placeholder: "01XXXXXXXXX" })} /></label>
-        <label className="wide">Courier delivery address<input {...f("courierRecipientAddress", { placeholder: "House, road, area, district" })} /></label>
-        <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
-        <label className="wide">Item / order details<input {...f("bikeNumbers", { placeholder: "e.g. Custom keychain, lithophane, model…" })} /></label>
-        <label className="wide note-field">Customization notes<textarea {...f("instructions", { rows: 3, placeholder: "✍️ Add important notes: color, size, text, design, customer requests…" })} /></label>
-        <label>Quantity<input {...f("quantity", { type: "number", min: 1, required: true })} /></label>
-        <label>Price per item (৳)<input {...f("unitPrice", { type: "number", min: 0, required: true })} /></label>
-        <label>Items total (৳)<input value={money(itemSubtotal)} readOnly /></label>
-        <label>Delivery area<select {...f("deliveryArea")}><option>Inside Dhaka</option><option>Outside Dhaka</option><option>No delivery</option></select></label>
-        <label>Delivery cost (৳)<input value={money(form.deliveryFee)} readOnly /></label>
-        <label>Total incl. delivery (৳)<input value={money(total)} readOnly /></label>
-        <label>Amount paid (৳)<input {...f("paidAmount", { type: "number", min: 0, step: "0.01" })} /></label>
-        <label>Delivery charge paid (৳)<input {...f("deliveryChargePaidAmount", { type: "number", min: 0, max: Number(form.deliveryFee || 0), step: "0.01" })} /></label>
-        <label>Due amount (৳)<input value={money(Math.max(0, total - Number(form.paidAmount || 0) - Number(form.deliveryChargePaidAmount || 0)))} readOnly /></label>
-        <label>Payment<select {...f("paymentStatus")}>{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
-        <label>Order status<select {...f("orderStatus")}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select></label>
-        <label>Order date<input {...f("orderDate", { type: "date" })} /></label>
-      </div>
-      <button type="button" className="more-toggle" onClick={() => setShowMore(v => !v)}>
-        <span>{showMore ? "−" : "+"} More details</span><small>Courier, tracking link, delivery & costs</small>
-      </button>
-      {showMore && <div className="grid ordergrid moregrid">
-        <label>Production cost (৳)<input {...f("productionCost", { type: "number", min: 0 })} /></label>
-        <label>Other cost (৳)<input {...f("otherCost", { type: "number", min: 0 })} /></label>
-        <label>Courier<input {...f("courierName", { placeholder: "Pathao, Steadfast…" })} /></label>
-        <label className="wide">Tracking URL<input {...f("trackingUrl", { type: "url", placeholder: "https://…" })} /></label>
-        <label>Delivery status<select {...f("deliveryStatus")}>{["Not shipped", "Ready for pickup", "Picked up", "In transit", "Out for delivery", "On hold", "Partially delivered", "Delivered", "Delivery failed", "Returned"].map(x => <option key={x}>{x}</option>)}</select></label>
-        <label>Extra field 1<input {...f("reference1")} /></label>
-        <label>Extra field 2<input {...f("reference2")} /></label>
-      </div>}
-      <div className="modalfoot orderfoot">
-        <span className="hint">Total including delivery <strong>{money(total)}</strong></span>
-        <div className="row">
-          <button type="button" className="btn" onClick={onClose}>Cancel</button>
-          <button className="btn primary" disabled={busy}>{busy ? "Saving…" : editing ? "Save changes" : "＋ Add order"}</button>
-        </div>
-      </div>
-    </form>
-  </div>;
+/* ───────────── item chips (custom highlighted) ───────────── */
+function ItemChips({ o }) {
+  const has = Array.isArray(o.items) && o.items.length;
+  return <div className="itemchips">{itemsOfOrder(o).map((i, k) => <span key={k} className={`ichip ${has && i.type === "Custom" ? "custom" : ""}`}>
+    <b>{i.name || "—"}</b>
+    {has ? <small>{sideShort(i.side)} · {i.type}{num(i.qty) > 1 ? ` ×${num(i.qty)}` : ""}</small> : (num(o.quantity) > 1 ? <small>×{num(o.quantity)}</small> : null)}
+  </span>)}</div>;
 }
 
 /* ───────────── Detail drawer: shows EVERY field ───────────── */
-function Drawer({ order, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy, onSync, syncBusy }) {
+function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy, onSync, syncBusy }) {
   const [paymentInput, setPaymentInput] = useState("");
   const due = getDue(order);
   const deliveryRemaining = Math.max(0, Number(order.deliveryFee || 0) - Number(order.deliveryChargePaidAmount || 0));
-  const keys = [...KNOWN_ORDER.filter(k => k === "id" || k in order), ...Object.keys(order).filter(k => !KNOWN_ORDER.includes(k)).sort()];
+  const keys = [...KNOWN_ORDER.filter(k => k === "id" || k in order), ...Object.keys(order).filter(k => !KNOWN_ORDER.includes(k)).sort()].filter(k => k !== "items");
   return <div className="overlay right" onMouseDown={e => e.target === e.currentTarget && onClose()}>
     <aside className="drawer">
       <div className="modalhead">
-        <div><h2>{order.customerName || "Unnamed order"}</h2><p>{fmtDate(order.createdAt || order.orderDate)}</p></div>
+        <div><h2>{serial ? <span className="serialtag">#{serial}</span> : null} {order.customerName || "Unnamed order"}</h2><p>{fmtDate(order.createdAt || order.orderDate)}</p></div>
         <button className="icon" onClick={onClose} aria-label="Close">✕</button>
       </div>
       <div className="drawertags">
@@ -188,6 +117,16 @@ function Drawer({ order, onClose, onEdit, onDelete, onQuick, onRecordPayment, on
         <button className="btn" onClick={() => onSync(order)} disabled={syncBusy}>{syncBusy ? "Syncing…" : "🔄 Sync courier status"}</button>
       </section>}
       {order.trackingUrl && <a className="btn" href={order.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a>}
+      <section className="drawer-items">
+        <h3>Items</h3>
+        {itemsOfOrder(order).map((i, k) => {
+          const has = Array.isArray(order.items) && order.items.length;
+          return <div key={k} className={`ditem ${has && i.type === "Custom" ? "custom" : ""}`}>
+            <div><strong>{i.name || "—"}</strong>{has && <small>{i.side} · {i.type}{i.type === "Custom" ? " ★" : ""}</small>}</div>
+            <span>{num(i.qty)} × {money(i.price)}</span><b>{money(num(i.qty) * num(i.price))}</b>
+          </div>;
+        })}
+      </section>
       <dl className="fields">
         {keys.map(k => <div key={k}><dt>{prettyKey(k)}</dt><dd>{display(k, order[k])}</dd></div>)}
       </dl>
@@ -210,6 +149,7 @@ function Dashboard({ user }) {
   const [expenseName, setExpenseName] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseCategory, setExpenseCategory] = useState("Materials");
+  const [prices, setPrices] = useState(DEFAULT_PRICES);
   const [lastSynced, setLastSynced] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [online, setOnline] = useState(false);
@@ -257,8 +197,9 @@ function Dashboard({ user }) {
       const data = snap.val() || {};
       setExpenses(Object.entries(data).filter(([, v]) => v && typeof v === "object").map(([id, v]) => ({ ...v, id })));
     }, err => setFirebaseError(err.message || "Unable to read expenses."));
+    const offPrices = onValue(ref(db, `${DB_ROOT}/settings/defaultPrices`), snap => setPrices({ ...DEFAULT_PRICES, ...(snap.val() || {}) }), () => {});
     const offConn = onValue(ref(db, ".info/connected"), s => setOnline(!!s.val()));
-    return () => { offOrders(); offExpenses(); offConn(); };
+    return () => { offOrders(); offExpenses(); offPrices(); offConn(); };
   }, [notify]);
 
   useEffect(() => {
@@ -275,6 +216,20 @@ function Dashboard({ user }) {
 
   const selectedOrder = selected && orders.find(o => o.id === selected);
   ordersRef.current = orders;
+
+  // serial number: stored on new orders; older orders get one by creation order
+  const serials = useMemo(() => {
+    const m = {};
+    orders.filter(o => !o.serial).sort((a, b) => (orderTime(a) || 0) - (orderTime(b) || 0) || String(a.id).localeCompare(String(b.id))).forEach((o, i) => { m[o.id] = i + 1; });
+    orders.forEach(o => { if (o.serial) m[o.id] = Number(o.serial); });
+    return m;
+  }, [orders]);
+  const nextSerial = Math.max(0, ...Object.values(serials)) + 1;
+
+  async function savePrices(p) {
+    try { await set(ref(getDb(), `${DB_ROOT}/settings/defaultPrices`), p); notify("Default prices saved"); }
+    catch (e) { notify("Could not save default prices: " + e.message, true); }
+  }
 
   const setAutoSync = v => { setAutoSyncState(v); try { localStorage.setItem("sf_auto", v ? "1" : "0"); } catch {} };
   useEffect(() => { try { if (localStorage.getItem("sf_auto") === "0") setAutoSyncState(false); } catch {} }, []);
@@ -400,7 +355,7 @@ function Dashboard({ user }) {
     const list = orders.filter(o =>
       (statusFilter === "All" || (o.orderStatus || "—") === statusFilter) &&
       (payFilter === "All" || o.paymentStatus === payFilter) &&
-      (!q || Object.values(o).join(" ").toLowerCase().includes(q)));
+      (!q || (Object.values(o).join(" ") + " #" + (serials[o.id] ?? "")).toLowerCase().includes(q)));
     const key = o => String(o.createdAt || o.id);
     const sorters = {
       newest: (a, b) => key(b).localeCompare(key(a)),
@@ -409,7 +364,7 @@ function Dashboard({ user }) {
       name: (a, b) => String(a.customerName || "").localeCompare(String(b.customerName || ""))
     };
     return list.sort(sorters[sort]);
-  }, [orders, search, statusFilter, payFilter, sort]);
+  }, [orders, serials, search, statusFilter, payFilter, sort]);
 
   async function addExpense(e) {
     e.preventDefault();
@@ -453,15 +408,19 @@ function Dashboard({ user }) {
 
   async function save(form) {
     setBusy(true);
-    const qty = Number(form.quantity || 0), price = Number(form.unitPrice || 0);
+    const items = (Array.isArray(form.items) ? form.items : []).filter(i => String(i.name || "").trim()).map(i => ({
+      name: String(i.name).trim(), side: i.side, type: i.type, qty: Math.max(1, num(i.qty)), price: num(i.price)
+    }));
+    const qty = items.reduce((s, i) => s + i.qty, 0), subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
+    const price = qty ? Math.round(subtotal / qty * 100) / 100 : 0;
     const payload = {
-      ...form, quantity: qty, unitPrice: price,
-      total: qty * price + Number(form.deliveryFee || 0),
-      itemsSubtotal: qty * price,
+      ...form, items, bikeNumbers: itemsText(items), quantity: qty, unitPrice: price,
+      total: subtotal + Number(form.deliveryFee || 0),
+      itemsSubtotal: subtotal,
       productionCost: Number(form.productionCost || 0), deliveryFee: Number(form.deliveryFee || 0),
       otherCost: Number(form.otherCost || 0), paidAmount: Number(form.paidAmount || 0),
       deliveryChargePaidAmount: Math.min(Number(form.deliveryFee || 0), Number(form.deliveryChargePaidAmount || 0)),
-      dueAmount: Math.max(0, qty * price + Number(form.deliveryFee || 0) - Number(form.paidAmount || 0) - Number(form.deliveryChargePaidAmount || 0)),
+      dueAmount: Math.max(0, subtotal + Number(form.deliveryFee || 0) - Number(form.paidAmount || 0) - Number(form.deliveryChargePaidAmount || 0)),
       updatedAt: new Date().toISOString()
     };
     try {
@@ -474,12 +433,12 @@ function Dashboard({ user }) {
       } else {
         const newRef = push(ref(getDb(), `${DB_ROOT}/orders`));
         await set(newRef, {
-          ...payload,
+          ...payload, serial: nextSerial,
           orderDate: form.orderDate || new Date().toLocaleString("en-GB", { timeZone: "Asia/Dhaka" }),
           createdAt: new Date().toISOString(),
           timeline: [{ status: form.orderStatus || "Pending", note: "Order created", at: new Date().toISOString() }]
         });
-        notify("Order saved");
+        notify(`Order #${nextSerial} saved`);
       }
       setModal(null);
     } catch (e) { notify("Could not save: " + e.message, true); }
@@ -572,13 +531,14 @@ function Dashboard({ user }) {
   function openEdit(o) {
     const values = { ...EMPTY };
     Object.keys(EMPTY).forEach(k => { if (o[k] !== undefined && o[k] !== null) values[k] = String(o[k]); });
+    values.items = itemsOfOrder(o);
     setSelected(null); setModal({ id: o.id, values });
   }
 
   function exportCsv() {
     const keys = [...KNOWN_ORDER, ...[...new Set(orders.flatMap(o => Object.keys(o)))].filter(k => !KNOWN_ORDER.includes(k))];
     const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = [keys.map(prettyKey).map(esc).join(","), ...visible.map(o => keys.map(k => esc(o[k])).join(","))].join("\n");
+    const csv = [keys.map(prettyKey).map(esc).join(","), ...visible.map(o => keys.map(k => esc(k === "items" ? o.bikeNumbers : o[k])).join(","))].join("\n");
     const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
     const a = Object.assign(document.createElement("a"), { href: url, download: `3d-bee-orders-${new Date().toISOString().slice(0, 10)}.csv` });
     a.click(); URL.revokeObjectURL(url);
@@ -639,7 +599,7 @@ function Dashboard({ user }) {
 
     <section className="panel">
       <div className="toolbar">
-        <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search any field — name, bike, phone, courier, notes…" />
+        <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search name, bike number, #serial, courier, notes…" />
         <select value={payFilter} onChange={e => setPayFilter(e.target.value)} aria-label="Payment filter">
           <option value="All">All payments</option>{PAYMENTS.map(p => <option key={p}>{p}</option>)}</select>
         <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
@@ -654,26 +614,25 @@ function Dashboard({ user }) {
       {!loaded ? <div className="empty">Loading orders…</div> : !visible.length ?
         <div className="empty">{orders.length ? "No orders match your filters." : <>No orders found at <code>/{DB_ROOT}/orders</code>. Add one or check the database path and rules.</>}</div> : <>
         <div className="tablewrap"><table>
-          <thead><tr><th>Customer</th><th>Bike no.</th><th>Contact / address</th><th>Customization</th><th>Qty</th><th>Bill / Paid / Due</th><th>Payment</th><th>Status</th><th>Courier</th><th>Extra 1</th><th>Extra 2</th><th>Created</th><th>Updated</th><th /></tr></thead>
+          <thead><tr><th>#</th><th>Customer</th><th>Items</th><th>Customization</th><th>Bill / Paid / Due</th><th>Payment</th><th>Status</th><th>Courier</th><th>Created</th><th /></tr></thead>
           <tbody>{visible.map(o => <tr key={o.id} onClick={() => setSelected(o.id)}>
-            <td><strong>{o.customerName || "—"}</strong><small>{o.orderDate}</small></td>
-            <td className="pre">{o.bikeNumbers}</td>
-            <td className="pre">{o.customerDetails}</td>
+            <td className="nowrap"><span className="serialtag">#{serials[o.id]}</span></td>
+            <td><strong>{o.customerName || "—"}</strong>{o.customerDetails && <small className="pre">{o.customerDetails}</small>}<small>{o.orderDate}</small></td>
+            <td><ItemChips o={o} /></td>
             <td className="pre">{o.instructions}</td>
-            <td>{o.quantity}</td>
             <td><BillCell o={o} /></td>
             <td>{quickSelect(o, "paymentStatus", PAYMENTS, payTone)}</td>
             <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}<ChargeTag o={o} /></td>
-            <td>{o.courierId}{o.courierId && <small><SfPill o={o} /></small>}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td><td className="pre">{o.reference1}</td><td className="pre">{o.reference2}</td>
-            <td className="nowrap">{fmtDate(o.createdAt)}</td><td className="nowrap">{fmtDate(o.updatedAt)}</td>
+            <td>{o.courierId}{o.courierId && <small><SfPill o={o} /></small>}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td>
+            <td className="nowrap">{fmtDate(o.createdAt)}</td>
             <td><button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
           </tr>)}</tbody></table></div>
 
         <div className="cards">{visible.map(o => <article key={o.id} className="card" onClick={() => setSelected(o.id)}>
-          <div className="cardtop"><strong>{o.customerName || "—"}</strong></div>
-          <p>{o.bikeNumbers || "No bike number"} · Qty {o.quantity ?? "—"}</p>
+          <div className="cardtop"><span className="serialtag">#{serials[o.id]}</span><strong>{o.customerName || "—"}</strong><small>{o.orderDate}</small></div>
+          <ItemChips o={o} />
           <BillCell o={o} />
-          <p className="clip">{o.customerDetails}</p>
+          {o.customerDetails && <p className="clip">{o.customerDetails}</p>}
           {o.trackingUrl && <a href={o.trackingUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
           <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
             <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><ChargeTag o={o} /></>}</div>
@@ -682,8 +641,8 @@ function Dashboard({ user }) {
     </>}
     <footer>3D Bee Order Desk · live Firebase sync · {visible.length} of {orders.length} orders shown · {lastSynced ? `Last sync ${lastSynced.toLocaleTimeString()}` : "Waiting for sync"}</footer>
 
-    {modal && <OrderModal initial={modal.values} editing={!!modal.id} busy={busy} onClose={() => setModal(null)} onSave={save} />}
-    {selectedOrder && <Drawer order={selectedOrder} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} onRecordPayment={recordPayment} onDeliveryChargePaid={markDeliveryChargePaid} onCreateCourier={createSteadfastOrder} courierBusy={courierBusy} onSync={o => syncCourier([o])} syncBusy={sync.busy} />}
+    {modal && <OrderModal initial={modal.values} editing={!!modal.id} editingId={modal.id} orders={orders} serials={serials} serialNo={modal.id ? serials[modal.id] : nextSerial} prices={prices} onSavePrices={savePrices} busy={busy} onClose={() => setModal(null)} onSave={save} />}
+    {selectedOrder && <Drawer order={selectedOrder} serial={serials[selectedOrder.id]} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} onRecordPayment={recordPayment} onDeliveryChargePaid={markDeliveryChargePaid} onCreateCourier={createSteadfastOrder} courierBusy={courierBusy} onSync={o => syncCourier([o])} syncBusy={sync.busy} />}
     {toast && <div className={`toast ${toast.bad ? "bad" : ""}`} role="status">{toast.text}</div>}
   </div>;
 }

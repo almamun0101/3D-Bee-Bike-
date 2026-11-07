@@ -115,3 +115,53 @@ export function buildSyncPatch(o, r, now) {
   if (tl.length !== oldTl.length) patch.timeline = tl;
   return { patch, ok: true, changed };
 }
+
+// ── order form constants (shared by the dashboard and the order form) ──
+export const STATUSES = ["Pending", "Processing", "Printing", "Ready to ship", "Shipped", "Delivered", "Completed", "Returned", "Cancelled"];
+export const PAYMENTS = ["Unpaid", "Pending", "Paid Advance", "Paid Full", "Delivery Charge Paid", "Cash On Delivery"];
+
+// ── order items (bike number plates) ──
+export const SIDES = ["Front Side", "Back Side"];
+export const TYPES = ["BRTA", "Custom"];
+// Default price per item type + side. Editable from the order form, saved to Firebase (settings/defaultPrices).
+export const DEFAULT_PRICES = { brtaFront: 250, brtaBack: 250, customFront: 300, customBack: 300 };
+export const priceKey = (type, side) => (type === "Custom" ? "custom" : "brta") + (side === "Back Side" ? "Back" : "Front");
+export const sideShort = s => (s === "Back Side" ? "Back" : "Front");
+
+// compare plate / customer names ignoring case, spaces and dashes
+export const normKey = s => String(s ?? "").toLowerCase().replace(/[^a-z0-9\u0980-\u09ff]/g, "");
+const digitsOf = s => String(s ?? "").replace(/\D/g, "");
+
+// "DHAKA-METRO 11-2233 · Front · BRTA ×2, ..." (kept in order.bikeNumbers so search / courier / CSV keep working)
+export const itemsText = items => (items || []).map(i => `${i.name} · ${sideShort(i.side)} · ${i.type}${num(i.qty) > 1 ? ` ×${num(i.qty)}` : ""}`).join(", ");
+
+// items of an order; old orders (no items array) become one item built from bikeNumbers / quantity / unitPrice
+export const legacyItems = o => [{ name: String(o?.bikeNumbers || ""), side: "Front Side", type: "BRTA", qty: num(o?.quantity) || 1, price: num(o?.unitPrice) || DEFAULT_PRICES.brtaFront }];
+export const itemsOfOrder = o => (Array.isArray(o?.items) && o.items.length ? o.items : legacyItems(o));
+
+export const shortDate = o => {
+  const t = orderTime(o);
+  return isNaN(t) ? (o?.orderDate || "—") : new Date(t).toLocaleDateString("en-GB", { timeZone: "Asia/Dhaka", day: "numeric", month: "short", year: "numeric" });
+};
+
+// every plate / item name ever ordered, with the order it belongs to
+export function buildPlateIndex(orders, skipId) {
+  const out = [];
+  for (const o of orders) {
+    if (!o || o.id === skipId) continue;
+    const list = Array.isArray(o.items) && o.items.length
+      ? o.items.map(i => ({ name: i.name, side: i.side, type: i.type, qty: i.qty }))
+      : String(o.bikeNumbers || "").split(/[,;\n]+/).map(s => ({ name: s.trim() })).filter(i => i.name);
+    for (const i of list) { const n = normKey(i.name); if (n) out.push({ ...i, n, order: o }); }
+  }
+  return out;
+}
+// exact = same plate; similar = same digits (plates) or same start (plain names)
+export function findPlate(index, typed) {
+  const n = normKey(typed);
+  if (n.length < 3) return { exact: [], similar: [] };
+  const d = digitsOf(typed);
+  const exact = index.filter(k => k.n === n);
+  const similar = index.filter(k => k.n !== n && (d.length >= 4 ? digitsOf(k.name).includes(d) : (!d && n.length >= 3 && k.n.startsWith(n))));
+  return { exact, similar };
+}
