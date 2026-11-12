@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
+import { printLabel, browserPrint, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
 import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
 import SfPill, { ChargeTag } from "./components/SfPill";
@@ -116,6 +117,12 @@ function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPay
         {order.steadfastSyncError && !order.steadfastStatus && <div className="alert">{order.steadfastSyncError}</div>}
         <button className="btn" onClick={() => onSync(order)} disabled={syncBusy}>{syncBusy ? "Syncing…" : "🔄 Sync courier status"}</button>
       </section>}
+      <section className="payment-box">
+        <button className="btn primary" onClick={() => printLabel(order, serial)}>🖨️ Print sticker (Bluetooth)</button>
+        <label>Sticker size (mm)<select defaultValue={getSizeKey()} onChange={e => setSizeKey(e.target.value)}>{SIZES.map(z => <option key={z} value={z}>{z.replace("x", " × ")}</option>)}</select></label>
+        <label>Printer type<select defaultValue={getMode()} onChange={e => setMode(e.target.value)}>{Object.entries(PRINTER_MODES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+        <div className="row wrap"><button className="btn sm" onClick={changePrinter}>Change printer</button><button className="btn sm" onClick={() => browserPrint(order, serial)}>Normal print</button></div>
+      </section>
       {order.trackingUrl && <a className="btn" href={order.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a>}
       <section className="drawer-items">
         <h3>Items</h3>
@@ -625,7 +632,7 @@ function Dashboard({ user }) {
             <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}<ChargeTag o={o} /></td>
             <td>{o.courierId}{o.courierId && <small><SfPill o={o} /></small>}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td>
             <td className="nowrap">{fmtDate(o.createdAt)}</td>
-            <td><button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
+            <td className="nowrap"><button className="btn sm" title="Print sticker" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️</button> <button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
           </tr>)}</tbody></table></div>
 
         <div className="cards">{visible.map(o => <article key={o.id} className="card" onClick={() => setSelected(o.id)}>
@@ -635,7 +642,7 @@ function Dashboard({ user }) {
           {o.customerDetails && <p className="clip">{o.customerDetails}</p>}
           {o.trackingUrl && <a href={o.trackingUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
           <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
-            <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><ChargeTag o={o} /></>}</div>
+            <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><ChargeTag o={o} /></>}<button className="btn sm" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️ Print</button></div>
         </article>)}</div></>}
     </section>
     </>}

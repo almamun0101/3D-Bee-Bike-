@@ -5,7 +5,7 @@ export const metadata = {
   description: "3D Bee order management dashboard"
 };
 
-export const viewport = { width: "device-width", initialScale: 1, themeColor: "#f6c343" };
+export const viewport = { width: "device-width", initialScale: 1, maximumScale: 1, userScalable: false, themeColor: "#f6c343" };
 
 export default function RootLayout({ children }) {
   return <html lang="en"><body>{children}</body></html>;

@@ -48,3 +48,8 @@ Step 0 er variables Netlify site e age boshiye nio.
 ## Note
 - Auto-sync (15 min) tokhoni chole jokhon dashboard browser e khola thake.
 - Local e chalate: `npm install` → `npm run dev` (function shoho chole).
+
+## Sticker print (Bluetooth)
+- Order drawer → **🖨️ Print sticker (Bluetooth)**. Printer: JP-PT265 (TSC / TSPL), sticker size dropdown default 40×30mm.
+- Web Bluetooth shudhu **HTTPS** e (Netlify e ache) ar **Android Chrome / desktop Chrome** e cholbe. iPhone Safari e hobe na.
+- Order e **Tracking / parcel ID** na thakle sticker print hobe na.

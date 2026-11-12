@@ -1,0 +1,208 @@
+import { getDue, money, itemsText, shortDate, num } from "./shared";
+
+// ── Thermal sticker size (mm). Change here if your roll is different. ──
+export const SIZES = ["40x30", "50x30", "50x25", "40x25", "30x20"];
+export const getSizeKey = () => { try { const v = localStorage.getItem("bee_label_size"); return SIZES.includes(v) ? v : "40x30"; } catch { return "40x30"; } };
+export const setSizeKey = v => { try { localStorage.setItem("bee_label_size", v); } catch {} };
+export const getSize = () => getSizeKey().split("x").map(Number);
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// parcel tracking id only (no serial fallback) - a sticker is never printed without it
+export const trackingOf = o => String(o?.courierId || o?.steadfastTrackingCode || "").trim();
+const NO_TRACKING = "Tracking ID nai! Age order-e Tracking / parcel ID boshao, tarpor print koro.";
+
+// Opens the browser print dialog with the same label image that Bluetooth sends.
+export function browserPrint(o, serial) {
+  const tid = trackingOf(o);
+  if (!tid) return toast(NO_TRACKING, true);
+  const img = drawLabel(o, serial), cv = document.createElement("canvas");
+  cv.width = img.width; cv.height = img.height; cv.getContext("2d").putImageData(img, 0, 0);
+  const wmm = img.width / DPI_DOTS_PER_MM, hmm = img.height / DPI_DOTS_PER_MM;
+  const html = `<!doctype html><html><head><meta charset="utf-8"><title>Label ${esc(tid)}</title><style>
+@page{size:${wmm}mm ${hmm}mm;margin:0}*{margin:0;padding:0}html,body{width:${wmm}mm;height:${hmm}mm;background:#fff}
+img{display:block;width:${wmm}mm;height:${hmm}mm;image-rendering:pixelated;page-break-after:avoid}
+</style></head><body><img src="${cv.toDataURL("image/png")}"></body></html>`;
+
+  const f = document.createElement("iframe");
+  f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0";
+  document.body.appendChild(f);
+  const w = f.contentWindow;
+  w.document.open(); w.document.write(html); w.document.close();
+  const go = () => { try { w.focus(); w.print(); } finally { setTimeout(() => f.remove(), 2000); } };
+  setTimeout(go, 250);
+}
+
+
+// ───────────── Bluetooth thermal printing (Web Bluetooth: Chrome on Android / desktop; not iOS Safari) ─────────────
+const DPI_DOTS_PER_MM = 8; // 200 dpi label printers
+const MAX_DOTS = 384; // JP-PT265 printable width (48mm)
+export const PRINTER_MODES = { tspl: "Label printer (TSPL)", escpos: "Receipt printer (ESC/POS)" };
+export const getMode = () => { try { return localStorage.getItem("bee_printer_mode") || "tspl"; } catch { return "tspl"; } };
+export const setMode = m => { try { localStorage.setItem("bee_printer_mode", m); } catch {} };
+
+// common BLE serial-over-GATT services used by cheap thermal / label printers
+const SERVICES = [
+  "000018f0-0000-1000-8000-00805f9b34fb", "0000ff00-0000-1000-8000-00805f9b34fb", "0000fff0-0000-1000-8000-00805f9b34fb",
+  "0000ffe0-0000-1000-8000-00805f9b34fb", "0000fee7-0000-1000-8000-00805f9b34fb", "0000ae30-0000-1000-8000-00805f9b34fb",
+  "49535343-fe7d-4ae5-8fa9-9fafd205e455", "e7810a71-73ae-499d-8c15-faa9aef0c3f2", "0000180a-0000-1000-8000-00805f9b34fb",
+  "00001800-0000-1000-8000-00805f9b34fb", "0000fe59-0000-1000-8000-00805f9b34fb"
+];
+
+let conn = { device: null, char: null };
+
+function toast(msg, err) {
+  if (typeof document === "undefined") return;
+  let el = document.getElementById("bee-print-toast");
+  if (!el) { el = document.createElement("div"); el.id = "bee-print-toast"; document.body.appendChild(el); }
+  el.textContent = msg;
+  el.style.cssText = `position:fixed;left:50%;bottom:22px;transform:translateX(-50%);z-index:99999;max-width:90vw;padding:11px 16px;border-radius:12px;font:600 13px system-ui,sans-serif;color:#fff;background:${err ? "#c0392b" : "#17171a"};box-shadow:0 6px 24px #0004;text-align:center`;
+  clearTimeout(el._t); el._t = setTimeout(() => el.remove(), err ? 6000 : 2800);
+}
+
+// ── Code 128 barcode (Code C for even digit-only ids, otherwise Code B) ──
+const C128 = "212222 222122 222221 121223 121322 131222 122213 122312 132212 221213 221312 231212 112232 122132 122231 113222 123122 123221 223211 221132 221231 213212 223112 312131 311222 321122 321221 312212 322112 322211 212123 212321 232121 111323 131123 131321 112313 132113 132311 211313 231113 231311 112133 112331 132131 113123 113321 133121 313121 211331 231131 213113 213311 213131 311123 311321 331121 312113 312311 332111 314111 221411 431111 111224 111422 121124 121421 141122 141221 112214 112412 122114 122411 142112 142211 241211 221114 413111 241112 134111 111242 121142 121241 114212 124112 124211 411212 421112 421211 212141 214121 412121 111143 111341 131141 114113 114311 411113 411311 113141 114131 311141 411131 211412 211214 211232 2331112".split(" ");
+export function code128Bits(text) {
+  const t = String(text);
+  const codes = [];
+  if (/^\d+$/.test(t) && t.length % 2 === 0) { codes.push(105); for (let i = 0; i < t.length; i += 2) codes.push(Number(t.slice(i, i + 2))); }
+  else { codes.push(104); for (const ch of t) { const c = ch.charCodeAt(0); codes.push(c >= 32 && c <= 126 ? c - 32 : 0); } }
+  let sum = codes[0]; for (let i = 1; i < codes.length; i++) sum += codes[i] * i;
+  codes.push(sum % 103, 106);
+  let bits = "", bar = true;
+  for (const c of codes) { for (const w of C128[c]) { bits += (bar ? "1" : "0").repeat(Number(w)); bar = !bar; } bar = true; }
+  return bits;
+}
+
+// draw the label on a canvas at printer resolution
+function drawLabel(o, serial) {
+  const [LW, LH] = getSize();
+  const PX_W = Math.min(MAX_DOTS, Math.floor(LW * DPI_DOTS_PER_MM / 8) * 8), PX_H = LH * DPI_DOTS_PER_MM;
+  const tid = trackingOf(o);
+  const total = Number(o?.total || 0), due = getDue(o), paid = Math.max(0, total - due);
+  const tk = n => "Tk " + Number(n).toLocaleString("en-US");
+  const c = document.createElement("canvas"); c.width = PX_W; c.height = PX_H;
+  const g = c.getContext("2d");
+  g.fillStyle = "#fff"; g.fillRect(0, 0, PX_W, PX_H); g.fillStyle = "#000"; g.strokeStyle = "#000"; g.textBaseline = "top";
+  const F = '"Noto Sans Bengali","Segoe UI",Arial,sans-serif';
+  const pad = 14, W = PX_W - pad * 2;
+  const tall = PX_H >= 240, mid = PX_H >= 200;
+  const fit = (txt, maxW, px, weight = 700, min = 12) => { let sz = px; g.font = `${weight} ${sz}px ${F}`; while (g.measureText(txt).width > maxW && sz > min) { sz -= 1; g.font = `${weight} ${sz}px ${F}`; } return sz; };
+  const text = (txt, x, y, px, { w = W, weight = 700, align = "left" } = {}) => { fit(txt, w, px, weight); g.textAlign = align; g.fillText(txt, x, y); };
+
+  // extra info lines (only as many as the sticker height allows)
+  const items = Array.isArray(o?.items) && o.items.length ? itemsText(o.items) : String(o?.bikeNumbers || "");
+  const phone = String(o?.courierRecipientPhone || "").trim();
+  const extras = [];
+  if (items) extras.push(items);
+  if (phone && tall) extras.push("☎ " + phone);
+  const maxExtra = tall ? 2 : mid ? 1 : 0;
+  extras.length = Math.min(extras.length, maxExtra);
+
+  let y = 10;
+  // header: courier + date (left), serial (right)
+  const head = [o?.courierName || (o?.courierId ? "Steadfast" : ""), shortDate(o)].filter(Boolean).join(" · ");
+  text(head, pad, y, 17, { w: W * 0.72, weight: 600 });
+  if (serial) text(`#${serial}`, PX_W - pad, y, 18, { w: W * 0.26, align: "right" });
+  y += 24;
+  // name
+  text(String(o?.customerName || "—"), pad, y, tall ? 32 : 28); y += tall ? 38 : 33;
+  // items / phone
+  for (const ex of extras) { text(ex, pad, y, 20, { weight: 600 }); y += 25; }
+  y += 4;
+  // DUE box
+  const dueH = tall ? 40 : 36;
+  g.lineWidth = 2; g.strokeRect(pad, y, W, dueH);
+  text("DUE", pad + 8, y + (dueH - 18) / 2, 18, { w: W * 0.3, weight: 700 });
+  g.textBaseline = "middle"; fit(tk(due), W * 0.64, tall ? 30 : 27, 900); g.textAlign = "right"; g.fillText(tk(due), PX_W - pad - 8, y + dueH / 2 + 1); g.textBaseline = "top";
+  y += dueH + 6;
+  // small barcode of the tracking id, then the big tracking number
+  const rest = PX_H - y - 6, numH = Math.max(20, Math.min(34, rest * 0.45)), barH = Math.max(18, rest - numH - 2);
+  const bits = code128Bits(tid), quiet = 10, mod = Math.max(1, Math.floor(W / (bits.length + quiet * 2)));
+  const bw = bits.length * mod, bx = Math.round((PX_W - bw) / 2);
+  for (let i = 0; i < bits.length;) { if (bits[i] === "1") { let j = i; while (bits[j] === "1") j++; g.fillRect(bx + i * mod, y, (j - i) * mod, barH); i = j; } else i++; }
+  y += barH + 2;
+  g.textBaseline = "middle"; const sz = fit(tid, W, numH, 900, 12); g.textAlign = "center"; g.fillText(tid, PX_W / 2, y + numH / 2);
+  return g.getImageData(0, 0, PX_W, PX_H);
+}
+
+// 1-bit packing; black=1 for ESC/POS, black=0 for TSPL
+function pack(img, blackIsOne) {
+  const PX_W = img.width, PX_H = img.height;
+  const bpr = PX_W / 8, out = new Uint8Array(bpr * PX_H);
+  for (let y = 0; y < PX_H; y++) for (let x = 0; x < PX_W; x++) {
+    const i = (y * PX_W + x) * 4, lum = img.data[i] * 0.3 + img.data[i + 1] * 0.59 + img.data[i + 2] * 0.11;
+    const black = lum < 160;
+    if (black === blackIsOne) out[y * bpr + (x >> 3)] |= 0x80 >> (x & 7);
+  }
+  return out;
+}
+
+const enc = s => new TextEncoder().encode(s);
+const cat = (...a) => { const n = new Uint8Array(a.reduce((s, x) => s + x.length, 0)); let p = 0; for (const x of a) { n.set(x, p); p += x.length; } return n; };
+
+function buildJob(img, mode) {
+  const PX_W = img.width, PX_H = img.height, [LABEL_W, LABEL_H] = getSize();
+  if (mode === "escpos") {
+    const bpr = PX_W / 8;
+    return cat(Uint8Array.of(0x1b, 0x40), Uint8Array.of(0x1d, 0x76, 0x30, 0, bpr & 255, bpr >> 8, PX_H & 255, PX_H >> 8), pack(img, true), Uint8Array.of(0x0a, 0x0a));
+  }
+  return cat(enc(`SIZE ${LABEL_W} mm,${LABEL_H} mm\r\nGAP 2 mm,0 mm\r\nDIRECTION 1\r\nCLS\r\nBITMAP 0,0,${PX_W / 8},${PX_H},0,`), pack(img, false), enc("\r\nPRINT 1,1\r\n"));
+}
+
+async function connect(forcePick) {
+  if (!forcePick && conn.char && conn.device?.gatt?.connected) return conn.char;
+  if (!forcePick && conn.device) { // reconnect to the same printer without asking again
+    try { conn.char = await findChar(await conn.device.gatt.connect()); return conn.char; } catch { conn = { device: null, char: null }; }
+  }
+  const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: SERVICES });
+  device.addEventListener("gattserverdisconnected", () => { conn.char = null; });
+  toast(`Connecting to ${device.name || "printer"}…`);
+  const char = await findChar(await device.gatt.connect());
+  conn = { device, char };
+  return char;
+}
+
+async function findChar(server) {
+  const services = await server.getPrimaryServices();
+  let best = null;
+  for (const sv of services) {
+    let chars = []; try { chars = await sv.getCharacteristics(); } catch {}
+    for (const ch of chars) {
+      const p = ch.properties;
+      if (p.writeWithoutResponse || p.write) { if (!best || (p.writeWithoutResponse && !best.properties.writeWithoutResponse)) best = ch; }
+    }
+  }
+  if (!best) throw new Error("No writable printer channel found on this device");
+  return best;
+}
+
+async function send(ch, data, chunk) {
+  for (let i = 0; i < data.length; i += chunk) {
+    const part = data.slice(i, i + chunk);
+    if (ch.properties.writeWithoutResponse) await ch.writeValueWithoutResponse(part); else await ch.writeValue(part);
+    if ((i / chunk) % 8 === 7) await new Promise(r => setTimeout(r, 15));
+  }
+}
+
+// Tap print → pick / reuse Bluetooth printer → send the label. Falls back to the browser print dialog if Bluetooth is not available.
+export async function printLabel(o, serial) {
+  if (!trackingOf(o)) return toast(NO_TRACKING, true);
+  if (typeof navigator === "undefined" || !navigator.bluetooth) {
+    toast("Bluetooth printing needs Chrome on Android. Opening normal print…", true);
+    return browserPrint(o, serial);
+  }
+  try {
+    const job = buildJob(drawLabel(o, serial), getMode());
+    let ch = await connect(false);
+    try { await send(ch, job, 100); } catch { ch = await connect(false); await send(ch, job, 20); }
+    toast("Sent to printer ✓");
+  } catch (e) {
+    if (e?.name === "NotFoundError") return toast("No printer selected", true); // user closed the picker
+    conn = { device: null, char: null };
+    toast(`Print failed: ${e?.message || e}`, true);
+  }
+}
+
+// choose a different printer next time
+export async function changePrinter() { conn = { device: null, char: null }; toast("Tap Print to pick a printer"); }

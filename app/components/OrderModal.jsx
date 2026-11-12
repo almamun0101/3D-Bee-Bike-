@@ -109,6 +109,11 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
         </div>
       </div>
 
+      {/* tracking id: always at the top so it is quick to paste / edit */}
+      <label className="trackbox">📦 Tracking / parcel ID <small>(sticker print-e lagbe)</small>
+        <input {...f("courierId", { placeholder: "Parcel tracking ID boshao", autoComplete: "off", autoCapitalize: "characters", spellCheck: false })} />
+      </label>
+
       {/* 1 · customer */}
       <section className="fsec">
         <h3><i>1</i> Customer</h3>
@@ -195,13 +200,12 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
       </section>
 
       <button type="button" className="more-toggle" onClick={() => setShowMore(v => !v)}>
-        <span>{showMore ? "−" : "+"} More details</span><small>Courier, tracking, costs, extra fields</small>
+        <span>{showMore ? "−" : "+"} More details</span><small>Courier, costs, extra fields</small>
       </button>
       {showMore && <div className="grid ordergrid moregrid">
         <label>Courier recipient phone<input {...f("courierRecipientPhone", { placeholder: "01XXXXXXXXX" })} /></label>
         <label className="wide">Courier delivery address<input {...f("courierRecipientAddress", { placeholder: "House, road, area, district" })} /></label>
         <label>Courier<input {...f("courierName", { placeholder: "Pathao, Steadfast…" })} /></label>
-        <label>Tracking / parcel ID<input {...f("courierId", { placeholder: "Tracking ID" })} /></label>
         <label className="wide">Tracking URL<input {...f("trackingUrl", { type: "url", placeholder: "https://…" })} /></label>
         <label>Delivery status<select {...f("deliveryStatus")}>{["Not shipped", "Ready for pickup", "Picked up", "In transit", "Out for delivery", "On hold", "Partially delivered", "Delivered", "Delivery failed", "Returned"].map(x => <option key={x}>{x}</option>)}</select></label>
         <label>Production cost (৳)<input {...f("productionCost", { type: "number", min: 0 })} /></label>

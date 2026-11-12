@@ -319,3 +319,16 @@ label small{font-weight:400;opacity:.8}
 .ditem small{display:block;color:var(--muted);font-size:11px}
 .ditem span{color:var(--muted);font-size:12px}
 .ditem.custom{background:var(--amber-bg);border-color:var(--gold-dark)}.ditem.custom small{color:var(--amber)}
+
+/* mobile: 16px+ inputs stop iOS/Android from zooming the page on focus */
+@media(max-width:900px){
+  input,textarea,select,.pillselect{font-size:16px}
+  .pillselect{padding:8px 10px}
+  input,select,textarea{touch-action:manipulation}
+}
+
+/* tracking id at the top of the order form */
+.trackbox{margin-top:14px;padding:10px 12px;border:1.5px solid var(--gold-dark);background:#fff8e1;border-radius:12px;color:var(--ink);font-size:12px}
+.trackbox small{font-weight:400;color:var(--muted)}
+.trackbox input{font-size:16px;font-weight:800;letter-spacing:.5px;background:#fff}
+.fsec:first-of-type{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
