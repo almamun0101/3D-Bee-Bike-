@@ -114,7 +114,7 @@ function renderLabel(o, serial, scale = 1) {
   const dueH = tall ? 40 : 36;
   g.lineWidth = 2; g.strokeRect(pad, y, W, dueH);
   text("DUE", pad + 8, y + (dueH - 18) / 2, 18, { w: W * 0.3, weight: 700 });
-  g.textBaseline = "middle"; fit(tk(due), W * 0.64, tall ? 30 : 27, 900); g.textAlign = "right"; g.fillText(tk(due), PX_W - pad - 8, y + dueH / 2 + 1); g.textBaseline = "top";
+  g.textBaseline = "middle"; const dueTxt = due > 0 ? tk(due) : "PAID"; fit(dueTxt, W * 0.64, tall ? 30 : 27, 900); g.textAlign = "right"; g.fillText(dueTxt, PX_W - pad - 8, y + dueH / 2 + 1); g.textBaseline = "top";
   y += dueH + 6;
   // small barcode of the tracking id, then the tracking number in a black pill
   const rest = PX_H - y - 6, barH = Math.max(16, Math.min(26, Math.round(rest * 0.38))), pillH = Math.min(46, rest - barH - 4);

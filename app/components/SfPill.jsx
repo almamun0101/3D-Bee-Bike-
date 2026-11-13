@@ -1,4 +1,4 @@
-import { SF, chargeOf, chargeDiff, money } from "../lib/shared";
+import { SF, chargeOf, chargeDiff, money, codInfo } from "../lib/shared";
 
 export default function SfPill({ o }) {
   const s = o?.steadfastStatus;
@@ -23,4 +23,13 @@ export function ChargeTag({ o }) {
     {d && d.diff < 0 && <b className="greent"> ▼ {money(-d.diff)} kom</b>}
     {d && d.diff === 0 && <b className="greent"> ✓ thik</b>}
   </small>;
+}
+
+// "💰 Collect ৳1,250" while the parcel is out for COD, "✅ COD ৳1,250" after Steadfast delivered it
+export function CollectTag({ o }) {
+  const c = codInfo(o);
+  if (!c || c.state === "paid") return null;
+  return c.state === "collect"
+    ? <small className="collecttag"><b>💰 Collect {money(c.amount)}</b></small>
+    : <small className="collecttag done">✅ COD {money(c.amount)} collected</small>;
 }

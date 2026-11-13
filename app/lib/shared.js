@@ -89,6 +89,15 @@ export function buildSyncPatch(o, r, now) {
   if (meta?.delivery) patch.deliveryStatus = meta.delivery;
   if (changed) tl.push({ status: `Steadfast: ${meta?.label || r.status}`, note: "Courier status synced", at: now });
   const cancelled = /cancel/i.test(o.orderStatus || "");
+  // auto status: courier status moves the order forward (never backwards, never over Completed / Returned / Cancelled)
+  const cur = o.orderStatus || "";
+  if (!cancelled && !isDone(cur)) {
+    if (r.status === "in_review" && ["", "Pending", "Processing", "Printing"].includes(cur)) {
+      patch.orderStatus = "Ready to ship"; tl.push({ status: "Ready to ship", note: "Auto: parcel is with Steadfast (in review)", at: now });
+    } else if (["pending", "hold"].includes(r.status) && ["", "Pending", "Processing", "Printing", "Ready to ship"].includes(cur)) {
+      patch.orderStatus = "Shipped"; tl.push({ status: "Shipped", note: r.status === "hold" ? "Auto: Steadfast parcel is on hold" : "Auto: Steadfast parcel is on the way to delivery", at: now });
+    }
+  }
   if (meta?.group === "delivered") {
     if (!o.steadfastDeliveredAt) patch.steadfastDeliveredAt = now;
     if (meta.partial) {
@@ -104,7 +113,7 @@ export function buildSyncPatch(o, r, now) {
       }
       patch.dueAmount = 0;
       patch.paymentStatus = "Paid Full";
-      if (!isDone(o.orderStatus) || /^returned$/i.test(o.orderStatus || "")) { patch.orderStatus = "Delivered"; tl.push({ status: "Delivered", note: "Delivered via Steadfast - COD collected, payment settled", at: now }); }
+      if (!isDone(o.orderStatus) || /^returned$/i.test(o.orderStatus || "")) { patch.orderStatus = "Completed"; tl.push({ status: "Completed", note: "Auto: delivered via Steadfast - COD collected, payment settled", at: now }); }
       else tl.push({ status: "Payment settled", note: "Steadfast delivered - COD collected, due cleared", at: now });
     }
   }
@@ -165,3 +174,23 @@ export function findPlate(index, typed) {
   const similar = index.filter(k => k.n !== n && (d.length >= 4 ? digitsOf(k.name).includes(d) : (!d && n.length >= 3 && k.n.startsWith(n))));
   return { exact, similar };
 }
+
+// ── COD (collect money) ──
+// collect = parcel is with the courier and the customer still owes money; collected = Steadfast delivered and settled; paid = nothing to collect
+export const codInfo = o => {
+  if (!o || !isSteadfast(o) || !sfIds(o).length) return null;
+  const g = sfGroup(o);
+  if (/cancel|return/i.test(o.orderStatus || "") || g === "cancelled") return null;
+  if (o.steadfastCodSettled || g === "delivered") { const a = num(o.steadfastCodAmount); return a > 0 ? { state: "collected", amount: a } : null; }
+  const due = getDue(o);
+  return due > 0 ? { state: "collect", amount: due } : { state: "paid", amount: 0 };
+};
+
+// ── smart views for the order list ──
+export const SMART = [
+  ["transit", "🚚 In transit", o => isSteadfast(o) && ["active", "hold"].includes(sfGroup(o)) && !isDone(o.orderStatus)],
+  ["collect", "💰 To collect", o => codInfo(o)?.state === "collect"],
+  ["notrack", "🏷️ Needs tracking ID", o => !o.courierId && !isDone(o.orderStatus) && /ready|ship/i.test(o.orderStatus || "")],
+  ["attention", "⚠️ Needs attention", o => (isSteadfast(o) && (sfGroup(o) === "hold" || sfGroup(o) === "error")) || (isReturned(o) && !/cancel/i.test(o.orderStatus || ""))],
+  ["unpaid", "💸 Has due", o => !isDone(o.orderStatus) && getDue(o) > 0]
+];

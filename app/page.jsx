@@ -5,9 +5,9 @@ import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
 import { printLabel, browserPrint, pdfPreview, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
-import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort } from "./lib/shared";
+import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, codInfo, SMART, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
-import SfPill, { ChargeTag } from "./components/SfPill";
+import SfPill, { ChargeTag, CollectTag } from "./components/SfPill";
 import BillCell from "./components/BillCell";
 import Courier from "./components/Courier";
 import Analytics from "./components/Analytics";
@@ -76,6 +76,15 @@ function ItemChips({ o }) {
 function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy, onSync, syncBusy }) {
   const [paymentInput, setPaymentInput] = useState("");
   const due = getDue(order);
+  const cod = codInfo(order);
+  // smart "next step" button
+  const st = order.orderStatus || "";
+  const next = /cancel|return|complet|deliver/i.test(st) ? null
+    : /^pending$/i.test(st) ? { label: "▶ Start processing", run: () => onQuick(order.id, "orderStatus", "Processing") }
+    : /^processing$/i.test(st) ? { label: "🖨️ Mark as printing", run: () => onQuick(order.id, "orderStatus", "Printing") }
+    : /^printing$/i.test(st) ? { label: "📦 Mark ready to ship", run: () => onQuick(order.id, "orderStatus", "Ready to ship") }
+    : !order.courierId ? { label: "🚚 Send to Steadfast", run: () => onCreateCourier(order) }
+    : { label: "🔄 Check courier status now", run: () => onSync(order) };
   const deliveryRemaining = Math.max(0, Number(order.deliveryFee || 0) - Number(order.deliveryChargePaidAmount || 0));
   const keys = [...KNOWN_ORDER.filter(k => k === "id" || k in order), ...Object.keys(order).filter(k => !KNOWN_ORDER.includes(k)).sort()].filter(k => k !== "items");
   return <div className="overlay right" onMouseDown={e => e.target === e.currentTarget && onClose()}>
@@ -89,6 +98,9 @@ function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPay
         <span className={`pill ${payTone(order.paymentStatus)}`}>{order.paymentStatus || "—"}</span>
         <strong className="big">{money(order.total)}</strong>
       </div>
+      {cod?.state === "collect" && <div className="collectbox"><span>💰 Collect from customer (COD)</span><strong>{money(cod.amount)}</strong><small>Steadfast delivery-r somoy ei taka ta nibe</small></div>}
+      {cod?.state === "collected" && <div className="collectbox done"><span>✅ COD collected by Steadfast</span><strong>{money(cod.amount)}</strong></div>}
+      {next && <button className="btn primary nextstep" disabled={courierBusy || syncBusy} onClick={next.run}>{next.label}</button>}
       <div className="quick">
         <label>Status<select value={order.orderStatus || ""} onChange={e => onQuick(order.id, "orderStatus", e.target.value)}>
           {!STATUSES.includes(order.orderStatus) && order.orderStatus && <option>{order.orderStatus}</option>}{STATUSES.map(x => <option key={x}>{x}</option>)}</select></label>
@@ -173,6 +185,7 @@ function Dashboard({ user }) {
   const [view, setView] = useState("orders");   // orders | courier | analytics
   const [sync, setSync] = useState({ busy: false, done: 0, total: 0, at: null });
   const [autoSync, setAutoSyncState] = useState(true);
+  const [smart, setSmart] = useState("all");
   const ordersRef = useRef([]);
   const syncingRef = useRef(false);
 
@@ -323,13 +336,16 @@ function Dashboard({ user }) {
     return matched;
   }
 
-  // auto-sync: once after load, then every 15 minutes (only parcels that are still on the way)
+  // auto-sync: once after load, then every 5 minutes and whenever you come back to the tab (only parcels that are still on the way)
   useEffect(() => {
     if (!autoSync || !loaded || !REQUIRE_LOGIN) return undefined;
-    const run = () => syncCourier(ordersRef.current.filter(o => isSteadfast(o) && sfIds(o).length && !["delivered", "cancelled"].includes(sfGroup(o))), true);
+    let last = 0;
+    const run = () => { last = Date.now(); syncCourier(ordersRef.current.filter(o => isSteadfast(o) && sfIds(o).length && !["delivered", "cancelled"].includes(sfGroup(o)) && !isDone(o.orderStatus)), true); };
+    const onFocus = () => { if (document.visibilityState !== "hidden" && Date.now() - last > 2 * 60 * 1000) run(); };
     const first = window.setTimeout(run, 2500);
-    const timer = window.setInterval(run, 15 * 60 * 1000);
-    return () => { window.clearTimeout(first); window.clearInterval(timer); };
+    const timer = window.setInterval(run, 5 * 60 * 1000);
+    document.addEventListener("visibilitychange", onFocus); window.addEventListener("focus", onFocus);
+    return () => { window.clearTimeout(first); window.clearInterval(timer); document.removeEventListener("visibilitychange", onFocus); window.removeEventListener("focus", onFocus); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoSync, loaded]);
 
@@ -347,7 +363,10 @@ function Dashboard({ user }) {
       profit: live.reduce((s, o) => s + Number(o.total || 0) - Number(o.productionCost || 0) - courierCost(o) - Number(o.otherCost || 0), 0) - returnLossTotal - expenses.reduce((s, e) => s + Number(e.amount || 0), 0),
       active: orders.filter(o => !isDone(o.orderStatus)).length,
       delivery: live.filter(o => !/delivered/i.test(o.deliveryStatus || "") && !/cancel/i.test(o.orderStatus || "")).length,
-      withCourier: orders.filter(o => isSteadfast(o) && ["active", "hold"].includes(sfGroup(o))).length
+      withCourier: orders.filter(o => isSteadfast(o) && ["active", "hold"].includes(sfGroup(o))).length,
+      toCollect: orders.reduce((a, o) => a + (codInfo(o)?.state === "collect" ? codInfo(o).amount : 0), 0),
+      toCollectN: orders.filter(o => codInfo(o)?.state === "collect").length,
+      collected: orders.reduce((a, o) => a + (codInfo(o)?.state === "collected" ? codInfo(o).amount : 0), 0)
     };
   }, [orders, expenses]);
 
@@ -359,7 +378,9 @@ function Dashboard({ user }) {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const sv = SMART.find(x => x[0] === smart)?.[2];
     const list = orders.filter(o =>
+      (!sv || sv(o)) &&
       (statusFilter === "All" || (o.orderStatus || "—") === statusFilter) &&
       (payFilter === "All" || o.paymentStatus === payFilter) &&
       (!q || (Object.values(o).join(" ") + " #" + (serials[o.id] ?? "")).toLowerCase().includes(q)));
@@ -371,7 +392,8 @@ function Dashboard({ user }) {
       name: (a, b) => String(a.customerName || "").localeCompare(String(b.customerName || ""))
     };
     return list.sort(sorters[sort]);
-  }, [orders, serials, search, statusFilter, payFilter, sort]);
+  }, [orders, serials, search, statusFilter, payFilter, sort, smart]);
+  const smartCounts = useMemo(() => Object.fromEntries(SMART.map(([k, , f]) => [k, orders.filter(f).length])), [orders]);
 
   async function addExpense(e) {
     e.preventDefault();
@@ -520,6 +542,7 @@ function Dashboard({ user }) {
         courierName: "Steadfast", ...(consignmentId ? { courierId: String(consignmentId) } : {}),
         ...(trackingCode ? { steadfastTrackingCode: String(trackingCode) } : {}),
         steadfastResponse: result, steadfastCodAmount: cod,
+        ...(["Pending", "Processing", "Printing", ""].includes(order.orderStatus || "") ? { orderStatus: "Ready to ship", timeline: [...(Array.isArray(order.timeline) ? order.timeline : []), { status: "Ready to ship", note: "Auto: Steadfast shipment created", at: new Date().toISOString() }] } : {}),
         deliveryStatus: "Ready for pickup", steadfastCreatedAt: new Date().toISOString(), steadfastStatus: "in_review", steadfastSyncedAt: new Date().toISOString(), steadfastSyncError: null, updatedAt: new Date().toISOString()
       });
       notify(`Steadfast shipment created${consignmentId ? ` · ID ${consignmentId}` : ""}. COD: ${money(cod)}`);
@@ -590,6 +613,8 @@ function Dashboard({ user }) {
       <div className="stat"><span>Business expenses</span><strong>{money(stats.overhead)}</strong></div>
       <div className="stat"><span>Awaiting delivery</span><strong>{stats.delivery}</strong></div>
       <div className="stat"><span>Return loss</span><strong className={stats.returnLoss > 0 ? "due-highlight" : ""}>{money(stats.returnLoss)}</strong><small>{stats.returned} returned parcels</small></div>
+      <div className="stat collectstat"><span>💰 COD to collect</span><strong>{money(stats.toCollect)}</strong><small>{stats.toCollectN} parcel with courier</small></div>
+      <div className="stat"><span>✅ COD collected</span><strong>{money(stats.collected)}</strong><small>Steadfast delivered</small></div>
       <div className="stat"><span>With courier now</span><strong>{stats.withCourier}</strong><small>Steadfast on the way</small></div>
     </section>
 
@@ -613,6 +638,10 @@ function Dashboard({ user }) {
           <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
           <option value="highest">Highest total</option><option value="name">Customer A–Z</option></select>
       </div>
+      <div className="chips smartchips">
+        <button className={`chip ${smart === "all" ? "active" : ""}`} onClick={() => setSmart("all")}>All orders</button>
+        {SMART.map(([k, label]) => <button key={k} className={`chip ${smart === k ? "active" : ""} ${k === "collect" ? "gold" : ""}`} onClick={() => setSmart(smart === k ? "all" : k)}>{label} <b>{smartCounts[k] || 0}</b></button>)}
+      </div>
       <div className="chips">
         {["All", ...Object.keys(statusCounts).filter(k => k !== "All")].map(s =>
           <button key={s} className={`chip ${statusFilter === s ? "active" : ""}`} onClick={() => setStatusFilter(s)}>{s} <b>{statusCounts[s] || 0}</b></button>)}
@@ -629,7 +658,7 @@ function Dashboard({ user }) {
             <td className="pre">{o.instructions}</td>
             <td><BillCell o={o} /></td>
             <td>{quickSelect(o, "paymentStatus", PAYMENTS, payTone)}</td>
-            <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}<ChargeTag o={o} /></td>
+            <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}<CollectTag o={o} /><ChargeTag o={o} /></td>
             <td>{o.courierId}{o.courierId && <small><SfPill o={o} /></small>}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td>
             <td className="nowrap">{fmtDate(o.createdAt)}</td>
             <td className="nowrap"><button className="btn sm" title="Print sticker" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️</button> <button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
@@ -642,7 +671,7 @@ function Dashboard({ user }) {
           {o.customerDetails && <p className="clip">{o.customerDetails}</p>}
           {o.trackingUrl && <a href={o.trackingUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
           <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
-            <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><ChargeTag o={o} /></>}<button className="btn sm" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️ Print</button></div>
+            <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><CollectTag o={o} /><ChargeTag o={o} /></>}<button className="btn sm" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️ Print</button></div>
         </article>)}</div></>}
     </section>
     </>}

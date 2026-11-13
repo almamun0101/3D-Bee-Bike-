@@ -332,3 +332,18 @@ label small{font-weight:400;opacity:.8}
 .trackbox small{font-weight:400;color:var(--muted)}
 .trackbox input{font-size:16px;font-weight:800;letter-spacing:.5px;background:#fff}
 .fsec:first-of-type{border-top:1px solid var(--line);padding-top:14px;margin-top:14px}
+
+/* collect money (COD) + smart views */
+.collecttag{display:inline-block;margin-top:4px;padding:3px 8px;border-radius:999px;background:#fff3cd;border:1px solid #f0c24b;color:#7a5200;font-size:12px}
+.collecttag.done{background:#e6f6ea;border-color:#9bd3a8;color:#17692b}
+.collectbox{display:flex;flex-direction:column;gap:2px;margin:12px 0;padding:12px 14px;border-radius:14px;background:linear-gradient(135deg,#fff3cd,#ffe08a);border:1.5px solid #f0c24b;color:#5c3d00}
+.collectbox span{font-size:12px;font-weight:700;letter-spacing:.3px}
+.collectbox strong{font-size:28px;line-height:1.1;font-weight:900}
+.collectbox small{opacity:.8}
+.collectbox.done{background:#e6f6ea;border-color:#9bd3a8;color:#17692b}
+.nextstep{width:100%;margin:0 0 12px;padding:13px;font-size:15px}
+.collectstat{border:1.5px solid #f0c24b;background:#fffaf0}
+.smartchips{margin-bottom:6px}
+.smartchips .chip{background:#f4f1ea}
+.smartchips .chip.gold{border-color:#f0c24b}
+.smartchips .chip.active{background:var(--ink);color:#fff}
