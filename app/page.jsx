@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
-import { printLabel, browserPrint, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
+import { printLabel, browserPrint, pdfPreview, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
 import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
 import SfPill, { ChargeTag } from "./components/SfPill";
@@ -121,7 +121,7 @@ function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPay
         <button className="btn primary" onClick={() => printLabel(order, serial)}>🖨️ Print sticker (Bluetooth)</button>
         <label>Sticker size (mm)<select defaultValue={getSizeKey()} onChange={e => setSizeKey(e.target.value)}>{SIZES.map(z => <option key={z} value={z}>{z.replace("x", " × ")}</option>)}</select></label>
         <label>Printer type<select defaultValue={getMode()} onChange={e => setMode(e.target.value)}>{Object.entries(PRINTER_MODES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
-        <div className="row wrap"><button className="btn sm" onClick={changePrinter}>Change printer</button><button className="btn sm" onClick={() => browserPrint(order, serial)}>Normal print</button></div>
+        <div className="row wrap"><button className="btn sm" onClick={changePrinter}>Change printer</button><button className="btn sm" onClick={() => pdfPreview(order, serial)}>📄 PDF preview</button><button className="btn sm" onClick={() => browserPrint(order, serial)}>Normal print</button></div>
       </section>
       {order.trackingUrl && <a className="btn" href={order.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a>}
       <section className="drawer-items">

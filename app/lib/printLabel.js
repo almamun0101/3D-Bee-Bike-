@@ -75,14 +75,14 @@ export function code128Bits(text) {
 }
 
 // draw the label on a canvas at printer resolution
-function drawLabel(o, serial) {
+function renderLabel(o, serial, scale = 1) {
   const [LW, LH] = getSize();
   const PX_W = Math.min(MAX_DOTS, Math.floor(LW * DPI_DOTS_PER_MM / 8) * 8), PX_H = LH * DPI_DOTS_PER_MM;
   const tid = trackingOf(o);
   const total = Number(o?.total || 0), due = getDue(o), paid = Math.max(0, total - due);
   const tk = n => "Tk " + Number(n).toLocaleString("en-US");
-  const c = document.createElement("canvas"); c.width = PX_W; c.height = PX_H;
-  const g = c.getContext("2d");
+  const c = document.createElement("canvas"); c.width = PX_W * scale; c.height = PX_H * scale;
+  const g = c.getContext("2d"); g.scale(scale, scale);
   g.fillStyle = "#fff"; g.fillRect(0, 0, PX_W, PX_H); g.fillStyle = "#000"; g.strokeStyle = "#000"; g.textBaseline = "top";
   const F = '"Noto Sans Bengali","Segoe UI",Arial,sans-serif';
   const pad = 14, W = PX_W - pad * 2;
@@ -116,15 +116,25 @@ function drawLabel(o, serial) {
   text("DUE", pad + 8, y + (dueH - 18) / 2, 18, { w: W * 0.3, weight: 700 });
   g.textBaseline = "middle"; fit(tk(due), W * 0.64, tall ? 30 : 27, 900); g.textAlign = "right"; g.fillText(tk(due), PX_W - pad - 8, y + dueH / 2 + 1); g.textBaseline = "top";
   y += dueH + 6;
-  // small barcode of the tracking id, then the big tracking number
-  const rest = PX_H - y - 6, numH = Math.max(20, Math.min(34, rest * 0.45)), barH = Math.max(18, rest - numH - 2);
-  const bits = code128Bits(tid), quiet = 10, mod = Math.max(1, Math.floor(W / (bits.length + quiet * 2)));
+  // small barcode of the tracking id, then the tracking number in a black pill
+  const rest = PX_H - y - 6, barH = Math.max(16, Math.min(26, Math.round(rest * 0.38))), pillH = Math.min(46, rest - barH - 4);
+  const bits = code128Bits(tid), mod = Math.max(1, Math.floor((W * 0.84) / bits.length));
   const bw = bits.length * mod, bx = Math.round((PX_W - bw) / 2);
   for (let i = 0; i < bits.length;) { if (bits[i] === "1") { let j = i; while (bits[j] === "1") j++; g.fillRect(bx + i * mod, y, (j - i) * mod, barH); i = j; } else i++; }
-  y += barH + 2;
-  g.textBaseline = "middle"; const sz = fit(tid, W, numH, 900, 12); g.textAlign = "center"; g.fillText(tid, PX_W / 2, y + numH / 2);
-  return g.getImageData(0, 0, PX_W, PX_H);
+  y += barH + 4;
+  const r = Math.min(10, pillH / 2); g.beginPath();
+  if (g.roundRect) g.roundRect(pad, y, W, pillH, r); else g.rect(pad, y, W, pillH);
+  g.fill();
+  g.fillStyle = "#fff"; g.textBaseline = "middle"; g.textAlign = "center";
+  const sp = "letterSpacing" in g ? 2 : 0;
+  fit(tid, W - 24 - tid.length * sp, Math.min(40, pillH * 0.8), 800, 12);
+  if (sp) g.letterSpacing = `${sp}px`;
+  g.fillText(tid, PX_W / 2 + sp / 2, y + pillH / 2 + 1);
+  if ("letterSpacing" in g) g.letterSpacing = "0px";
+  g.fillStyle = "#000";
+  return c;
 }
+function drawLabel(o, serial) { const c = renderLabel(o, serial, 1); return c.getContext("2d").getImageData(0, 0, c.width, c.height); }
 
 // 1-bit packing; black=1 for ESC/POS, black=0 for TSPL
 function pack(img, blackIsOne) {
@@ -206,3 +216,32 @@ export async function printLabel(o, serial) {
 
 // choose a different printer next time
 export async function changePrinter() { conn = { device: null, char: null }; toast("Tap Print to pick a printer"); }
+
+// ───────────── PDF preview (check the sticker without wasting a sticker) ─────────────
+function makePdf(jpeg, pw, ph, wmm, hmm) {
+  const W = +(wmm * 72 / 25.4).toFixed(2), H = +(hmm * 72 / 25.4).toFixed(2), parts = [], offs = [];
+  let len = 0; const add = x => { const u = typeof x === "string" ? enc(x) : x; parts.push(u); len += u.length; };
+  const obj = (n, head, stream) => { offs[n] = len; add(`${n} 0 obj\n${head}`); if (stream) { add("\nstream\n"); add(stream); add("\nendstream"); } add("\nendobj\n"); };
+  add("%PDF-1.4\n");
+  obj(1, "<< /Type /Catalog /Pages 2 0 R >>");
+  obj(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+  obj(3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${W} ${H}] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>`);
+  const cs = enc(`q ${W} 0 0 ${H} 0 0 cm /Im0 Do Q`);
+  obj(4, `<< /Length ${cs.length} >>`, cs);
+  obj(5, `<< /Type /XObject /Subtype /Image /Width ${pw} /Height ${ph} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>`, jpeg);
+  const xr = len; let x = "xref\n0 6\n0000000000 65535 f \n";
+  for (let i = 1; i <= 5; i++) x += String(offs[i]).padStart(10, "0") + " 00000 n \n";
+  add(x + `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xr}\n%%EOF`);
+  return cat(...parts);
+}
+
+export function pdfPreview(o, serial) {
+  if (!trackingOf(o)) return toast(NO_TRACKING, true);
+  const [LW, LH] = getSize(), c = renderLabel(o, serial, 4);
+  const b64 = c.toDataURL("image/jpeg", 0.95).split(",")[1], bin = atob(b64), jpeg = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) jpeg[i] = bin.charCodeAt(i);
+  const wmm = c.width / 4 / DPI_DOTS_PER_MM, url = URL.createObjectURL(new Blob([makePdf(jpeg, c.width, c.height, wmm, LH)], { type: "application/pdf" }));
+  const w = window.open(url, "_blank");
+  if (!w) { const a = document.createElement("a"); a.href = url; a.download = `sticker-${trackingOf(o)}.pdf`; document.body.appendChild(a); a.click(); a.remove(); }
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
