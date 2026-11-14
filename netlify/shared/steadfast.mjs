@@ -26,6 +26,49 @@ export async function sf(path) {
   throw new Error(`Steadfast e connect hocche na: ${last}`);
 }
 
+// Creating a parcel must NEVER be sent twice. We only move to the next base URL when the connection could not even be opened;
+// after a timeout / unclear failure we stop, because Steadfast may already have created the parcel.
+const NOT_REACHED = new Set(["ENOTFOUND", "ECONNREFUSED", "EAI_AGAIN", "ERR_TLS_CERT_ALTNAME_INVALID", "CERT_HAS_EXPIRED"]);
+export async function sfPost(path, body) {
+  let last = "";
+  for (const base of BASES) {
+    let r;
+    try {
+      r = await fetch(`${base}/${path}`, {
+        method: "POST",
+        headers: { "Api-Key": process.env.STEADFAST_API_KEY.trim(), "Secret-Key": process.env.STEADFAST_SECRET_KEY.trim(), "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(15000)
+      });
+    } catch (e) {
+      if (NOT_REACHED.has(e?.cause?.code)) { last = `${base} -> ${why(e)}`; continue; }
+      const err = new Error("Steadfast did not answer in time. The parcel MAY have been created - check Steadfast / use Sync before trying again.");
+      err.unsure = true; throw err;
+    }
+    const text = await r.text();
+    let data; try { data = JSON.parse(text); } catch { data = { message: text.slice(0, 200) || "Invalid response from Steadfast" }; }
+    return { status: r.status, data };
+  }
+  throw new Error(`Could not reach Steadfast: ${last}`);
+}
+
+// Tracking ID -> Steadfast status. Tries consignment id, tracking code and invoice automatically.
+const isNum = s => /^\d+$/.test(s);
+export async function resolveStatus(ids) {
+  let lastMsg = "";
+  for (const id of (ids || []).slice(0, 3)) {
+    const c = String(id || "").trim();
+    if (!c) continue;
+    const kinds = isNum(c) ? ["status_by_cid", "status_by_trackingcode", "status_by_invoice"] : ["status_by_trackingcode", "status_by_invoice", "status_by_cid"];
+    for (const kind of kinds) {
+      const d = await sf(`${kind}/${encodeURIComponent(c)}`);
+      if (d && d.delivery_status) return { status: d.delivery_status, matchedBy: kind, matchedId: c };
+      lastMsg = d?.message || lastMsg;
+      if (/unauthor|invalid.*(key|secret)/i.test(lastMsg)) return { error: "Steadfast API key/secret bhul (Unauthorized)" };
+    }
+  }
+  return { error: lastMsg || "Steadfast e ei ID pawa jayni" };
+}
+
 // ── Firebase ID token verification (standard method: RS256 signature against Google's public certs) ──
 const CERT_URL = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com";
 let certCache = { certs: null, until: 0 };

@@ -32,7 +32,7 @@ export const isSteadfast = o => /steadfast/i.test(courierOf(o));
 // ids we try against Steadfast (tracking id = Steadfast consignment id / tracking code / our invoice)
 export const sfIds = o => {
   const ids = [o?.courierId, o?.steadfastTrackingCode].map(x => String(x ?? "").trim()).filter(Boolean);
-  if (ids.length) ids.push(`3DBEE-${o.id}`);
+  if (ids.length || o?.steadfastInvoiceLinked) ids.push(`3DBEE-${o.id}`);
   return [...new Set(ids)].slice(0, 3);
 };
 
@@ -79,12 +79,24 @@ export const returnLoss = o => num(o?.productionCost) + num(o?.otherCost) + cour
 
 // Pure function: Steadfast status -> what to write on the order (status, COD settled, payment, return, timeline).
 export function buildSyncPatch(o, r, now) {
-  if (!r || !r.status) return { patch: { steadfastSyncError: r?.error || "ID not found on Steadfast", steadfastSyncedAt: now }, ok: false, changed: false };
+  // a failed lookup is counted, so one hiccup is not treated like a real problem (see monitorInfo)
+  if (!r || !r.status) return { patch: { steadfastSyncError: r?.error || "ID not found on Steadfast", steadfastSyncedAt: now, steadfastSyncFailures: Number(o.steadfastSyncFailures || 0) + 1 }, ok: false, changed: false };
   const meta = SF[r.status];
-  const patch = { steadfastStatus: r.status, steadfastSyncedAt: now, steadfastSyncError: null };
+  const patch = { steadfastStatus: r.status, steadfastSyncedAt: now, steadfastSyncError: null, steadfastSyncFailures: null };
   const oldTl = Array.isArray(o.timeline) ? o.timeline : [];
   const tl = [...oldTl];
   const changed = o.steadfastStatus !== r.status;
+  // tracking info: when did the courier status last change, last courier message, and a small event log
+  patch.steadfastLastEventAt = r.eventAt || (changed || r.message ? now : o.steadfastLastEventAt || o.steadfastStatusChangedAt || now);
+  if (changed) patch.steadfastStatusChangedAt = now;
+  if (r.message) patch.steadfastTrackingMessage = String(r.message).slice(0, 300);
+  if (r.providerUpdatedAt) patch.steadfastProviderUpdatedAt = String(r.providerUpdatedAt);
+  if (changed || r.message) {
+    const ev = Array.isArray(o.steadfastEvents) ? o.steadfastEvents : [];
+    const last = ev[ev.length - 1];
+    const entry = { at: now, status: r.status, ...(r.message ? { message: String(r.message).slice(0, 300) } : {}), source: r.source || "sync" };
+    if (!last || last.status !== entry.status || last.message !== entry.message) patch.steadfastEvents = [...ev, entry].slice(-30);
+  }
   if (!o.courierName) patch.courierName = "Steadfast";
   if (meta?.delivery) patch.deliveryStatus = meta.delivery;
   if (changed) tl.push({ status: `Steadfast: ${meta?.label || r.status}`, note: "Courier status synced", at: now });
@@ -95,7 +107,7 @@ export function buildSyncPatch(o, r, now) {
     if (r.status === "in_review" && ["", "Pending", "Processing", "Printing"].includes(cur)) {
       patch.orderStatus = "Ready to ship"; tl.push({ status: "Ready to ship", note: "Auto: parcel is with Steadfast (in review)", at: now });
     } else if (["pending", "hold"].includes(r.status) && ["", "Pending", "Processing", "Printing", "Ready to ship"].includes(cur)) {
-      patch.orderStatus = "Shipped"; tl.push({ status: "Shipped", note: r.status === "hold" ? "Auto: Steadfast parcel is on hold" : "Auto: Steadfast parcel is on the way to delivery", at: now });
+      patch.orderStatus = "Shipped"; if (!o.shippedAt) patch.shippedAt = now; tl.push({ status: "Shipped", note: r.status === "hold" ? "Auto: Steadfast parcel is on hold" : "Auto: Steadfast parcel is on the way to delivery", at: now });
     }
   }
   if (meta?.group === "delivered") {
@@ -118,7 +130,7 @@ export function buildSyncPatch(o, r, now) {
     }
   }
   if (meta?.group === "cancelled" && !/cancel|return/i.test(o.orderStatus || "")) {
-    patch.orderStatus = "Returned";
+    patch.orderStatus = "Returned"; if (!o.steadfastReturnedAt) patch.steadfastReturnedAt = now;
     tl.push({ status: "Returned", note: "Parcel cancelled / returned by Steadfast", at: now });
   }
   if (tl.length !== oldTl.length) patch.timeline = tl;

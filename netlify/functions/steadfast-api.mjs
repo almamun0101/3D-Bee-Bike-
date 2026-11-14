@@ -1,27 +1,11 @@
-import { json, sf, verifyUser, missingCreds } from "../shared/steadfast.mjs";
+import { json, sf, verifyUser, missingCreds, resolveStatus } from "../shared/steadfast.mjs";
 
-const isNum = s => /^\d+$/.test(s);
-
-// Tracking ID -> Steadfast status. Tries consignment id, tracking code and invoice automatically.
-async function resolveStatus(ids) {
-  let lastMsg = "";
-  for (const id of (ids || []).slice(0, 3)) {
-    const c = String(id || "").trim();
-    if (!c) continue;
-    const kinds = isNum(c) ? ["status_by_cid", "status_by_trackingcode", "status_by_invoice"] : ["status_by_trackingcode", "status_by_invoice", "status_by_cid"];
-    for (const kind of kinds) {
-      const d = await sf(`${kind}/${encodeURIComponent(c)}`);
-      if (d && d.delivery_status) return { status: d.delivery_status, matchedBy: kind, matchedId: c };
-      lastMsg = d?.message || lastMsg;
-      if (/unauthor|invalid.*(key|secret)/i.test(lastMsg)) return { error: "Steadfast API key/secret bhul (Unauthorized)" };
-    }
-  }
-  return { error: lastMsg || "Steadfast e ei ID pawa jayni" };
-}
+import { adminConfigured, dbGet } from "../shared/firebaseAdmin.mjs";
+import { runSync } from "../shared/syncCore.mjs";
 
 export default async request => {
   // Open /.netlify/functions/steadfast-api in the browser to confirm the function is deployed.
-  if (request.method === "GET") return json({ ok: true, message: "steadfast-api function is live", credentialsSet: !missingCreds() });
+  if (request.method === "GET") return json({ ok: true, message: "steadfast-api function is live", credentialsSet: !missingCreds(), serverSyncReady: adminConfigured(), webhookReady: !!process.env.STEADFAST_WEBHOOK_TOKEN });
   if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
   const auth = await verifyUser(request);
   if (auth.error) return auth.error;
@@ -30,6 +14,19 @@ export default async request => {
   try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
   try {
     switch (body.action) {
+      case "health": {
+        let meta = null; if (adminConfigured()) { try { meta = await dbGet("meta/serverSync"); } catch (e) { meta = { error: e.message }; } }
+        return json({ credentialsSet: true, serverSyncReady: adminConfigured(), webhookReady: !!process.env.STEADFAST_WEBHOOK_TOKEN, meta });
+      }
+      case "serverSync": {
+        if (!adminConfigured()) return json({ error: "Server sync needs FIREBASE_SERVICE_ACCOUNT in Netlify environment variables." }, 503);
+        return json(await runSync({ source: "manual", force: true }));
+      }
+      case "tracking": { // best effort: Steadfast tracking history for one invoice (may not be enabled for every account)
+        const inv = String(body.invoice ?? "").replace(/[^\w-]/g, "");
+        if (!inv) return json({ error: "Missing invoice" }, 400);
+        return json(await sf(`trackings_by_invoice/${inv}`));
+      }
       case "balance": return json(await sf("get_balance"));
       case "payments": return json(await sf(`payments?page=${Number(body.page) || 1}`));
       case "payment": {

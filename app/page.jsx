@@ -7,7 +7,15 @@ import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN 
 import { printLabel, browserPrint, pdfPreview, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
 import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, codInfo, SMART, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
-import SfPill, { ChargeTag, CollectTag } from "./components/SfPill";
+import SfPill, { ChargeTag, CollectTag, TrackLink } from "./components/SfPill";
+import Monitor from "./components/Monitor";
+import Overview from "./components/Dashboard";
+import Notifications from "./components/Notifications";
+import Settings from "./components/Settings";
+import { normalizeMonitor, monitorInfo, followUpDue, fmtDuration, fmtAgo, fmtDhaka, TZ } from "./lib/monitor";
+import { buildAlerts } from "./lib/alerts";
+import { useNow } from "./lib/useNow";
+import { toCsv, toXlsx, download, stamp, ORDER_COLUMNS } from "./lib/exporter";
 import BillCell from "./components/BillCell";
 import Courier from "./components/Courier";
 import Analytics from "./components/Analytics";
@@ -73,8 +81,22 @@ function ItemChips({ o }) {
 }
 
 /* ───────────── Detail drawer: shows EVERY field ───────────── */
-function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy, onSync, syncBusy }) {
+const notesText = o => (Array.isArray(o.internalNotes) ? o.internalNotes.map(n => n?.text).join(" ") : "");
+// same customer = same phone (last 10 digits), else same name
+const custKey = o => {
+  const phone = String(o.courierRecipientPhone || (String(o.customerDetails || "").match(/01[3-9]\d{8}/) || [""])[0]).replace(/\D/g, "").slice(-10);
+  if (phone.length >= 10) return "p" + phone;
+  const name = String(o.customerName || "").trim().toLowerCase().replace(/\s+/g, " ");
+  return name.length >= 3 ? "n" + name : "";
+};
+
+function Drawer({ order, serial, cfg, now, orders, serials, onOpen, onNote, onFollowUp, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy, onSync, syncBusy }) {
   const [paymentInput, setPaymentInput] = useState("");
+  const [noteInput, setNoteInput] = useState("");
+  const mi = monitorInfo(order, cfg, now);
+  const ck = custKey(order);
+  const past = useMemo(() => ck ? orders.filter(o => o.id !== order.id && custKey(o) === ck).sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))) : [], [orders, order.id, ck]);
+  const notes = Array.isArray(order.internalNotes) ? order.internalNotes : [];
   const due = getDue(order);
   const cod = codInfo(order);
   // smart "next step" button
@@ -135,7 +157,32 @@ function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPay
         <label>Printer type<select defaultValue={getMode()} onChange={e => setMode(e.target.value)}>{Object.entries(PRINTER_MODES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
         <div className="row wrap"><button className="btn sm" onClick={changePrinter}>Change printer</button><button className="btn sm" onClick={() => pdfPreview(order, serial)}>📄 PDF preview</button><button className="btn sm" onClick={() => browserPrint(order, serial)}>Normal print</button></div>
       </section>
-      {order.trackingUrl && <a className="btn" href={order.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a>}
+      {(order.courierId || order.steadfastTrackingCode) && <section className="payment-box">
+        <div className="payment-summary"><span>Tracking</span><TrackLink o={order} cfg={cfg} showId /></div>
+        {mi && <>
+          <div className="payment-summary"><span>{mi.closed ? (mi.delivered ? "Delivered in" : "Closed after") : "In transit for"}</span><b className={`tierbadge ${mi.tierMeta.tone}`}>{fmtDuration(mi.hours)}{mi.active && mi.tier ? ` · ${mi.tierMeta.label}` : ""}</b></div>
+          <div className="payment-summary"><span>Shipped</span><b>{fmtDhaka(mi.start)}</b></div>
+          <div className="payment-summary"><span>Last courier update</span><b>{Number.isFinite(mi.last) ? `${fmtAgo(mi.last, now)} · ${fmtDhaka(mi.last)}` : "—"}</b></div></>}
+        {order.steadfastTrackingMessage && <div className="payment-summary"><span>Courier message</span><b className="msg">{order.steadfastTrackingMessage}</b></div>}
+        {Array.isArray(order.steadfastEvents) && order.steadfastEvents.length > 0 && <ol className="events">{[...order.steadfastEvents].reverse().slice(0, 8).map((e, i) => <li key={i}><b>{SF[e.status]?.label || e.status || "Update"}</b>{e.message && <span>{e.message}</span>}<time>{fmtDhaka(e.at)}</time></li>)}</ol>}
+      </section>}
+      {order.followUpAt && !order.followUpDone && <section className={`payment-box fubadge ${followUpDue(order, now) ? "due" : ""}`}>
+        <div className="payment-summary"><span>📞 Follow-up</span><b>{followUpDue(order, now) ? "Due now" : fmtDhaka(order.followUpAt)}</b></div>
+        {order.followUpNote && <small>{order.followUpNote}</small>}
+        <button className="btn sm" onClick={() => onFollowUp(order.id, { followUpDone: true })}>✓ Mark done</button>
+      </section>}
+      <section className="drawer-items">
+        <h3>Internal notes <small>(only you can see these)</small></h3>
+        <form className="noteform" onSubmit={e => { e.preventDefault(); if (noteInput.trim()) { onNote(order.id, "add", noteInput.trim()); setNoteInput(""); } }}>
+          <input value={noteInput} onChange={e => setNoteInput(e.target.value)} placeholder="Add a note…" maxLength={500} aria-label="Internal note" />
+          <button className="btn primary sm" disabled={!noteInput.trim()}>Add</button>
+        </form>
+        {notes.length > 0 && <ul className="notes">{[...notes].map((n, i) => ({ n, i })).reverse().map(({ n, i }) => <li key={i}><p>{n.text}</p><small>{fmtDhaka(n.at)}{n.by ? ` · ${n.by}` : ""}</small><button className="x" aria-label="Delete note" onClick={() => onNote(order.id, "delete", i)}>✕</button></li>)}</ul>}
+      </section>
+      {past.length > 0 && <section className="drawer-items">
+        <h3>Customer history <small>{past.length} other order{past.length > 1 ? "s" : ""} · lifetime {money(past.reduce((a, o) => a + Number(o.total || 0), Number(order.total || 0)))}{past.some(o => getDue(o) > 0) ? ` · due ${money(past.reduce((a, o) => a + getDue(o), 0))}` : ""}</small></h3>
+        <ul className="history">{past.slice(0, 6).map(o => <li key={o.id}><button onClick={() => onOpen(o.id)}><b>#{serials[o.id]}</b><span>{o.bikeNumbers || fmtDate(o.createdAt)}</span><i className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</i><em>{money(o.total)}</em></button></li>)}</ul>
+      </section>}
       <section className="drawer-items">
         <h3>Items</h3>
         {itemsOfOrder(order).map((i, k) => {
@@ -162,7 +209,7 @@ function Drawer({ order, serial, onClose, onEdit, onDelete, onQuick, onRecordPay
 }
 
 /* ───────────── Dashboard ───────────── */
-function Dashboard({ user }) {
+function Desk({ user }) {
   const [orders, setOrders] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [expenseName, setExpenseName] = useState("");
@@ -174,15 +221,34 @@ function Dashboard({ user }) {
   const [online, setOnline] = useState(false);
   const [firebaseError, setFirebaseError] = useState("");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("All");
-  const [payFilter, setPayFilter] = useState("All");
+  const [statuses, setStatuses] = useState([]);
+  const [pays, setPays] = useState([]);
+  const [courierF, setCourierF] = useState("any");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [dueOnly, setDueOnly] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [picked, setPicked] = useState(() => new Set());
+  const [views, setViews] = useState({});
+  const [cfg, setCfg] = useState(() => normalizeMonitor(null));
+  const [monPreset, setMonPreset] = useState(null);
+  const creatingRef = useRef(new Set());
+  const now = useNow(30000);
   const [sort, setSort] = useState("newest");
   const [modal, setModal] = useState(null);   // null | { id?, values }
   const [selected, setSelected] = useState(null);
+  // Esc closes the order drawer (the edit form is left alone so nothing typed is lost)
+  useEffect(() => {
+    const h = e => { if (e.key === "Escape") { setExportOpen(false); if (!modal) setSelected(null); } };
+    window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
+  }, [modal]);
   const [busy, setBusy] = useState(false);
   const [courierBusy, setCourierBusy] = useState(false);
   const [toast, setToast] = useState(null);
-  const [view, setView] = useState("orders");   // orders | courier | analytics
+  const [view, setView] = useState("dashboard");   // dashboard | orders | monitor | courier | analytics | settings
   const [sync, setSync] = useState({ busy: false, done: 0, total: 0, at: null });
   const [autoSync, setAutoSyncState] = useState(true);
   const [smart, setSmart] = useState("all");
@@ -218,8 +284,10 @@ function Dashboard({ user }) {
       setExpenses(Object.entries(data).filter(([, v]) => v && typeof v === "object").map(([id, v]) => ({ ...v, id })));
     }, err => setFirebaseError(err.message || "Unable to read expenses."));
     const offPrices = onValue(ref(db, `${DB_ROOT}/settings/defaultPrices`), snap => setPrices({ ...DEFAULT_PRICES, ...(snap.val() || {}) }), () => {});
+    const offCfg = onValue(ref(db, `${DB_ROOT}/settings/monitor`), snap => setCfg(normalizeMonitor(snap.val())), () => {});
+    const offViews = onValue(ref(db, `${DB_ROOT}/settings/views`), snap => setViews(snap.val() || {}), () => {});
     const offConn = onValue(ref(db, ".info/connected"), s => setOnline(!!s.val()));
-    return () => { offOrders(); offExpenses(); offPrices(); offConn(); };
+    return () => { offOrders(); offExpenses(); offPrices(); offCfg(); offViews(); offConn(); };
   }, [notify]);
 
   useEffect(() => {
@@ -379,20 +447,38 @@ function Dashboard({ user }) {
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     const sv = SMART.find(x => x[0] === smart)?.[2];
-    const list = orders.filter(o =>
-      (!sv || sv(o)) &&
-      (statusFilter === "All" || (o.orderStatus || "—") === statusFilter) &&
-      (payFilter === "All" || o.paymentStatus === payFilter) &&
-      (!q || (Object.values(o).join(" ") + " #" + (serials[o.id] ?? "")).toLowerCase().includes(q)));
+    const from = dateFrom ? Date.parse(`${dateFrom}T00:00:00+06:00`) : NaN, to = dateTo ? Date.parse(`${dateTo}T23:59:59+06:00`) : NaN;
+    const list = orders.filter(o => {
+      if (sv && !sv(o)) return false;
+      if (statuses.length && !statuses.includes(o.orderStatus || "—")) return false;
+      if (pays.length && !pays.includes(o.paymentStatus)) return false;
+      const hasTrack = !!(o.courierId || o.steadfastTrackingCode);
+      if (courierF === "with" && !hasTrack) return false;
+      if (courierF === "without" && hasTrack) return false;
+      if (dueOnly && getDue(o) <= 0) return false;
+      if (Number.isFinite(from) || Number.isFinite(to)) { const t = orderTime(o); if (!Number.isFinite(t) || (Number.isFinite(from) && t < from) || (Number.isFinite(to) && t > to)) return false; }
+      return !q || (Object.values(o).filter(v => typeof v !== "object").join(" ") + " #" + (serials[o.id] ?? "") + " " + notesText(o)).toLowerCase().includes(q);
+    });
     const key = o => String(o.createdAt || o.id);
     const sorters = {
       newest: (a, b) => key(b).localeCompare(key(a)),
       oldest: (a, b) => key(a).localeCompare(key(b)),
       highest: (a, b) => Number(b.total || 0) - Number(a.total || 0),
+      due: (a, b) => getDue(b) - getDue(a),
       name: (a, b) => String(a.customerName || "").localeCompare(String(b.customerName || ""))
     };
     return list.sort(sorters[sort]);
-  }, [orders, serials, search, statusFilter, payFilter, sort, smart]);
+  }, [orders, serials, search, statuses, pays, courierF, dueOnly, dateFrom, dateTo, sort, smart]);
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  const curPage = Math.min(page, pageCount);
+  const pageRows = useMemo(() => visible.slice((curPage - 1) * pageSize, curPage * pageSize), [visible, curPage, pageSize]);
+  useEffect(() => { setPage(1); }, [search, statuses, pays, courierF, dueOnly, dateFrom, dateTo, sort, smart, pageSize]);
+  // drop selections of orders that disappeared
+  useEffect(() => { setPicked(p => { const ids = new Set(orders.map(o => o.id)); const n = new Set([...p].filter(id => ids.has(id))); return n.size === p.size ? p : n; }); }, [orders]);
+  const alerts = useMemo(() => buildAlerts(orders, cfg, serials, now), [orders, cfg, serials, now]);
+  const activeFilters = statuses.length + pays.length + (courierF !== "any") + dueOnly + !!dateFrom + !!dateTo + (smart !== "all");
+  const clearFilters = () => { setStatuses([]); setPays([]); setCourierF("any"); setDueOnly(false); setDateFrom(""); setDateTo(""); setSmart("all"); setSearch(""); };
+  const toggle = (list, setList, v) => setList(list.includes(v) ? list.filter(x => x !== v) : [...list, v]);
   const smartCounts = useMemo(() => Object.fromEntries(SMART.map(([k, , f]) => [k, orders.filter(f).length])), [orders]);
 
   async function addExpense(e) {
@@ -412,7 +498,7 @@ function Dashboard({ user }) {
     catch (e) { notify("Could not delete expense: " + e.message, true); }
   }
 
-  async function quick(id, field, value) {
+  async function quick(id, field, value, silent) {
     try {
       const now = new Date().toISOString();
       const current = orders.find(o => o.id === id);
@@ -431,7 +517,7 @@ function Dashboard({ user }) {
         patch.timeline = [...timeline, { status: value, note: "Order status changed", at: now }];
       }
       await update(ref(getDb(), `${DB_ROOT}/orders/${id}`), patch);
-      notify(`${prettyKey(field)} updated to “${value}”`);
+      if (!silent) notify(`${prettyKey(field)} updated to “${value}”`);
     } catch (e) { notify("Update failed: " + e.message, true); }
   }
 
@@ -516,6 +602,9 @@ function Dashboard({ user }) {
 
   async function createSteadfastOrder(order) {
     if (!order) return;
+    if (creatingRef.current.has(order.id)) return;
+    if (order.courierId && !confirm(`This order already has tracking ID ${order.courierId}. Create ANOTHER Steadfast parcel for it?`)) return;
+    creatingRef.current.add(order.id);
     const phone = String(order.courierRecipientPhone || (String(order.customerDetails || "").match(/01[3-9]\d{8}/) || [""])[0]).trim();
     const address = String(order.courierRecipientAddress || order.customerDetails || "").trim();
     if (!phone || !address) return notify("Add the recipient phone and full courier address in Edit order first.", true);
@@ -534,6 +623,12 @@ function Dashboard({ user }) {
         })
       });
       const result = await response.json().catch(() => ({}));
+      if (response.status === 409 && result.duplicate) {
+        // Steadfast already has this invoice: link the order to it instead of creating a second parcel
+        await update(ref(getDb(), `${DB_ROOT}/orders/${order.id}`), { courierName: "Steadfast", steadfastInvoiceLinked: true, ...(result.delivery_status ? { steadfastStatus: result.delivery_status } : {}), updatedAt: new Date().toISOString() });
+        notify(`${result.error} Linked by invoice - add its tracking ID from the Steadfast panel.`, true);
+        return;
+      }
       if (!response.ok || result.status === 400 || result.status === 401) throw new Error(result.message || result.error || `Steadfast request failed (${response.status})`);
       const consignment = result.consignment || result.data || result;
       const consignmentId = consignment.consignment_id || consignment.id || consignment.tracking_code || "";
@@ -543,11 +638,12 @@ function Dashboard({ user }) {
         ...(trackingCode ? { steadfastTrackingCode: String(trackingCode) } : {}),
         steadfastResponse: result, steadfastCodAmount: cod,
         ...(["Pending", "Processing", "Printing", ""].includes(order.orderStatus || "") ? { orderStatus: "Ready to ship", timeline: [...(Array.isArray(order.timeline) ? order.timeline : []), { status: "Ready to ship", note: "Auto: Steadfast shipment created", at: new Date().toISOString() }] } : {}),
+        ...(!order.trackingUrl && /^https?:\/\//i.test(String(consignment.tracking_link || result.tracking_link || "")) ? { trackingUrl: String(consignment.tracking_link || result.tracking_link) } : {}),
         deliveryStatus: "Ready for pickup", steadfastCreatedAt: new Date().toISOString(), steadfastStatus: "in_review", steadfastSyncedAt: new Date().toISOString(), steadfastSyncError: null, updatedAt: new Date().toISOString()
       });
       notify(`Steadfast shipment created${consignmentId ? ` · ID ${consignmentId}` : ""}. COD: ${money(cod)}`);
     } catch (e) { notify("Steadfast error: " + e.message, true); }
-    finally { setCourierBusy(false); }
+    finally { setCourierBusy(false); creatingRef.current.delete(order.id); }
   }
 
   async function removeOrder(id) {
@@ -565,13 +661,60 @@ function Dashboard({ user }) {
     setSelected(null); setModal({ id: o.id, values });
   }
 
-  function exportCsv() {
+  // CSV (all fields) - kept for full backups
+  function exportCsv(list = visible) {
     const keys = [...KNOWN_ORDER, ...[...new Set(orders.flatMap(o => Object.keys(o)))].filter(k => !KNOWN_ORDER.includes(k))];
-    const esc = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const csv = [keys.map(prettyKey).map(esc).join(","), ...visible.map(o => keys.map(k => esc(k === "items" ? o.bikeNumbers : o[k])).join(","))].join("\n");
-    const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
-    const a = Object.assign(document.createElement("a"), { href: url, download: `3d-bee-orders-${new Date().toISOString().slice(0, 10)}.csv` });
-    a.click(); URL.revokeObjectURL(url);
+    const csv = toCsv(keys.map(prettyKey), list.map(o => keys.map(k => k === "items" ? o.bikeNumbers : typeof o[k] === "object" && o[k] !== null ? JSON.stringify(o[k]) : o[k])));
+    download(new Blob([csv], { type: "text/csv;charset=utf-8" }), `3d-bee-orders-full-${stamp()}.csv`);
+  }
+  // readable CSV / real Excel file of the selected orders (or everything that matches the filters)
+  function exportRows(fmt) {
+    const list = picked.size ? visible.filter(o => picked.has(o.id)) : visible;
+    if (!list.length) return notify("Nothing to export", true);
+    const head = ORDER_COLUMNS.map(c => c[0]), rows = list.map(o => ORDER_COLUMNS.map(c => c[1](o, serials[o.id])));
+    if (fmt === "xlsx") download(toXlsx(head, rows, "Orders"), `3d-bee-orders-${stamp()}.xlsx`);
+    else if (fmt === "full") exportCsv(list);
+    else download(new Blob([toCsv(head, rows)], { type: "text/csv;charset=utf-8" }), `3d-bee-orders-${stamp()}.csv`);
+    setExportOpen(false); notify(`Exported ${list.length} order${list.length > 1 ? "s" : ""}`);
+  }
+  async function bulkSet(field, value) {
+    const ids = [...picked]; if (!ids.length || !value) return;
+    if (!confirm(`Set ${prettyKey(field)} to “${value}” for ${ids.length} order${ids.length > 1 ? "s" : ""}?`)) return;
+    for (const id of ids) await quick(id, field, value, true);
+    notify(`${ids.length} order${ids.length > 1 ? "s" : ""} updated`);
+  }
+  async function bulkDelete() {
+    const ids = [...picked]; if (!ids.length || !confirm(`Delete ${ids.length} order${ids.length > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    try { for (const id of ids) await remove(ref(getDb(), `${DB_ROOT}/orders/${id}`)); setPicked(new Set()); notify(`${ids.length} deleted`); } catch (e) { notify("Delete failed: " + e.message, true); }
+  }
+  async function setFollowUp(id, p) {
+    try { await update(ref(getDb(), `${DB_ROOT}/orders/${id}`), { ...p, updatedAt: new Date().toISOString() }); notify(p.followUpDone ? "Follow-up marked done" : p.followUpAt ? "Follow-up saved" : "Follow-up removed"); }
+    catch (e) { notify("Could not save follow-up: " + e.message, true); }
+  }
+  async function changeNote(id, op, val) {
+    const cur = orders.find(o => o.id === id); const list = Array.isArray(cur?.internalNotes) ? [...cur.internalNotes] : [];
+    if (op === "add") list.push({ text: String(val).slice(0, 500), at: new Date().toISOString(), by: user?.email || "" }); else list.splice(val, 1);
+    try { await update(ref(getDb(), `${DB_ROOT}/orders/${id}`), { internalNotes: list.length ? list : null, updatedAt: new Date().toISOString() }); }
+    catch (e) { notify("Could not save note: " + e.message, true); }
+  }
+  async function saveCfg(c) {
+    try { await set(ref(getDb(), `${DB_ROOT}/settings/monitor`), c); notify("Settings saved"); } catch (e) { notify("Could not save settings: " + e.message, true); }
+  }
+  const viewState = () => ({ search, statuses, pays, courierF, dateFrom, dateTo, dueOnly, smart, sort });
+  async function saveView() {
+    const name = (prompt("Name this view (e.g. “COD to collect this week”)") || "").trim().slice(0, 40);
+    if (!name) return;
+    try { await push(ref(getDb(), `${DB_ROOT}/settings/views`), { name, f: viewState(), createdAt: new Date().toISOString() }); notify(`View “${name}” saved`); } catch (e) { notify("Could not save view: " + e.message, true); }
+  }
+  function applyView(id) {
+    const f = views[id]?.f; if (!f) return;
+    setSearch(f.search || ""); setStatuses(f.statuses || []); setPays(f.pays || []); setCourierF(f.courierF || "any"); setDateFrom(f.dateFrom || ""); setDateTo(f.dateTo || ""); setDueOnly(!!f.dueOnly); setSmart(f.smart || "all"); setSort(f.sort || "newest");
+  }
+  async function deleteView(id) { if (confirm(`Delete view “${views[id]?.name}”?`)) try { await remove(ref(getDb(), `${DB_ROOT}/settings/views/${id}`)); } catch (e) { notify("Could not delete view: " + e.message, true); } }
+  function go(v, opts = {}) {
+    if (opts.smart) { clearFilters(); setSmart(opts.smart); }
+    if (v === "monitor") setMonPreset({ tab: opts.tab, tier: opts.tier, k: Date.now() });
+    setView(v);
   }
 
   const quickSelect = (o, field, list, tone) => <select className={`pillselect ${tone(o[field])}`} value={o[field] || ""}
@@ -581,28 +724,44 @@ function Dashboard({ user }) {
     {list.map(x => <option key={x}>{x}</option>)}
   </select>;
 
-  return <div className="shell">
-    <header className="top">
-      <div className="brand"><div className="logo sm">🐝</div>
-        <div><div className="eyebrow">3D BEE</div><h1>Order Desk</h1></div></div>
-      <div className="row wrap">
-        <span className={`live ${online ? "on" : ""}`}><i />{online ? "Live" : "Offline"}</span>
-        <button className="btn" onClick={exportCsv} disabled={!orders.length}>⬇ Export CSV</button>
-        <button className="btn primary" onClick={() => setModal({ values: EMPTY })}>＋ New order</button>
-        {REQUIRE_LOGIN && <button className="btn ghost" onClick={() => signOut(getAuthInstance())} title={user?.email}>Sign out</button>}
-      </div>
-    </header>
+  const NAV = [["dashboard", "🏠", "Dashboard"], ["orders", "📋", "Orders"], ["monitor", "🛰", "Monitor"], ["courier", "🚚", "Courier"], ["analytics", "📊", "Analytics"], ["settings", "⚙️", "Settings"]];
+  const navBadge = k => k === "monitor" ? alerts.filter(a => a.level === "red" || a.level === "orange").length : 0;
+  const title = NAV.find(n => n[0] === view)?.[2] || "";
+  const allOnPage = pageRows.length > 0 && pageRows.every(o => picked.has(o.id));
+  const togglePage = () => setPicked(p => { const n = new Set(p); if (allOnPage) pageRows.forEach(o => n.delete(o.id)); else pageRows.forEach(o => n.add(o.id)); return n; });
+  const pick1 = (id, e) => { e.stopPropagation(); setPicked(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; }); };
+  const miOf = o => monitorInfo(o, cfg, now);
 
+  return <div className="app">
+    <aside className="side" aria-label="Main navigation">
+      <div className="brand"><div className="logo sm">🐝</div><div><div className="eyebrow">3D BEE</div><strong className="brandname">Order Desk</strong></div></div>
+      <nav className="sidenav">{NAV.map(([k, icon, label]) => <button key={k} className={`navitem ${view === k ? "active" : ""}`} onClick={() => go(k)} aria-current={view === k ? "page" : undefined}><span className="ni">{icon}</span><span>{label}</span>{navBadge(k) > 0 && <b className="navbadge">{navBadge(k)}</b>}</button>)}</nav>
+      <div className="sidefoot">
+        <span className={`live ${online ? "on" : ""}`}><i />{online ? "Live" : "Offline"}</span>
+        {REQUIRE_LOGIN && <><small className="who" title={user?.email}>{user?.email}</small><button className="btn ghost sm" onClick={() => signOut(getAuthInstance())}>Sign out</button></>}
+      </div>
+    </aside>
+
+    <div className="main">
+      <header className="topbar">
+        <h1>{title}</h1>
+        <div className="row wrap topactions">
+          <Notifications alerts={alerts} onOpen={id => setSelected(id)} />
+          <div className="menuwrap">
+            <button className="btn" onClick={() => setExportOpen(o => !o)} disabled={!orders.length} aria-expanded={exportOpen}>⬇ Export ▾</button>
+            {exportOpen && <><div className="scrim" onClick={() => setExportOpen(false)} /><div className="menu" role="menu">
+              <small>{picked.size ? `${picked.size} selected` : `${visible.length} filtered`} order{(picked.size || visible.length) === 1 ? "" : "s"}</small>
+              <button role="menuitem" onClick={() => exportRows("xlsx")}>📗 Excel (.xlsx)</button><button role="menuitem" onClick={() => exportRows("csv")}>📄 CSV (readable)</button><button role="menuitem" onClick={() => exportRows("full")}>🗂 CSV (all fields)</button></div></>}
+          </div>
+          <button className="btn primary" onClick={() => setModal({ values: EMPTY })}>＋ New order</button>
+        </div>
+      </header>
+
+      {!online && loaded && <div className="alert offline" role="status">You are offline. Changes will sync when the connection returns.</div>}
     {firebaseError && <div className="alert firebase-alert" role="alert"><strong>Database connection problem:</strong> {firebaseError}<br />Check your Firebase Realtime Database URL, authentication, and database rules. Your existing cloud data has not been deleted.</div>}
 
-    <nav className="tabs" aria-label="Sections">
-      {[["orders", "📋 Orders"], ["courier", "🚚 Courier"], ["analytics", "📊 Analytics"]].map(([k, l]) => <button key={k} className={`tab ${view === k ? "active" : ""}`} onClick={() => setView(k)}>{l}{k === "courier" && stats.withCourier > 0 && <b>{stats.withCourier}</b>}</button>)}
-    </nav>
-
-    {view === "courier" && <Courier orders={orders} sync={sync} onSync={syncCourier} autoSync={autoSync} setAutoSync={setAutoSync} onOpen={id => setSelected(id)} />}
-    {view === "analytics" && <Analytics orders={orders} expenses={expenses} />}
-
-    {view === "orders" && <>
+      <main className="content" key={view}>
+      {view === "dashboard" && <Overview orders={orders} serials={serials} cfg={cfg} now={now} stats={stats} onGo={go} onOpen={id => setSelected(id)}>
     <section className="stats">
       <div className="stat"><span>Total orders</span><strong>{stats.count}</strong></div>
       <div className="stat"><span>Sales / order value</span><strong>{money(stats.value)}</strong></div>
@@ -617,7 +776,6 @@ function Dashboard({ user }) {
       <div className="stat"><span>✅ COD collected</span><strong>{money(stats.collected)}</strong><small>Steadfast delivered</small></div>
       <div className="stat"><span>With courier now</span><strong>{stats.withCourier}</strong><small>Steadfast on the way</small></div>
     </section>
-
     <section className="panel expensepanel">
       <div className="expensehead"><div><h2>Business expenses</h2><p>Log filament, electricity, packaging, tools, rent or other overheads. These are deducted from estimated profit.</p></div><strong>{money(stats.overhead)}</strong></div>
       <form className="expenseform" onSubmit={addExpense}>
@@ -628,57 +786,88 @@ function Dashboard({ user }) {
       </form>
       {expenses.length > 0 && <div className="expenseitems">{[...expenses].sort((a,b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""))).slice(0,8).map(x => <div key={x.id}><span><strong>{x.name}</strong><small>{x.category} · {fmtDate(x.createdAt)}</small></span><b>{money(x.amount)}</b><button className="icon" onClick={() => deleteExpense(x.id)} aria-label="Delete expense">✕</button></div>)}</div>}
     </section>
+      </Overview>}
+      {view === "monitor" && <Monitor key={monPreset?.k || 0} orders={orders} cfg={cfg} serials={serials} now={now} sync={sync} onSync={list => syncCourier(list)} onOpen={id => setSelected(id)} onFollowUp={setFollowUp} preset={monPreset} />}
+      {view === "courier" && <Courier orders={orders} sync={sync} onSync={syncCourier} autoSync={autoSync} setAutoSync={setAutoSync} onOpen={id => setSelected(id)} />}
+      {view === "analytics" && <Analytics orders={orders} expenses={expenses} />}
+      {view === "settings" && <Settings cfg={cfg} onSave={saveCfg} notify={notify} now={now} />}
 
-    <section className="panel">
-      <div className="toolbar">
-        <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search name, bike number, #serial, courier, notes…" />
-        <select value={payFilter} onChange={e => setPayFilter(e.target.value)} aria-label="Payment filter">
-          <option value="All">All payments</option>{PAYMENTS.map(p => <option key={p}>{p}</option>)}</select>
-        <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort">
-          <option value="newest">Newest first</option><option value="oldest">Oldest first</option>
-          <option value="highest">Highest total</option><option value="name">Customer A–Z</option></select>
-      </div>
-      <div className="chips smartchips">
-        <button className={`chip ${smart === "all" ? "active" : ""}`} onClick={() => setSmart("all")}>All orders</button>
-        {SMART.map(([k, label]) => <button key={k} className={`chip ${smart === k ? "active" : ""} ${k === "collect" ? "gold" : ""}`} onClick={() => setSmart(smart === k ? "all" : k)}>{label} <b>{smartCounts[k] || 0}</b></button>)}
-      </div>
-      <div className="chips">
-        {["All", ...Object.keys(statusCounts).filter(k => k !== "All")].map(s =>
-          <button key={s} className={`chip ${statusFilter === s ? "active" : ""}`} onClick={() => setStatusFilter(s)}>{s} <b>{statusCounts[s] || 0}</b></button>)}
-      </div>
+      {view === "orders" && <section className="panel">
+        <div className="toolbar">
+          <input className="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="🔎  Search name, bike number, #serial, tracking ID, notes…" aria-label="Search orders" />
+          <button className={`btn ${filtersOpen || activeFilters ? "on" : ""}`} onClick={() => setFiltersOpen(o => !o)} aria-expanded={filtersOpen}>⚙ Filters{activeFilters > 0 && <b className="countdot">{activeFilters}</b>}</button>
+          <select value={sort} onChange={e => setSort(e.target.value)} aria-label="Sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option><option value="highest">Highest total</option><option value="due">Highest due</option><option value="name">Customer A–Z</option></select>
+          <select aria-label="Saved views" value="" onChange={e => { const v = e.target.value; if (v === "__save") saveView(); else if (v.startsWith("__del:")) deleteView(v.slice(6)); else if (v) applyView(v); }}>
+            <option value="">⭐ Views</option>{Object.entries(views).map(([id, v]) => <option key={id} value={id}>{v.name}</option>)}
+            <option value="__save">＋ Save current view…</option>{Object.entries(views).map(([id, v]) => <option key={"d" + id} value={"__del:" + id}>🗑 Delete “{v.name}”</option>)}</select>
+        </div>
+        {filtersOpen && <div className="filterpanel">
+          <fieldset><legend>Status</legend><div className="chips">{STATUSES.map(x => <button key={x} className={`chip ${statuses.includes(x) ? "active" : ""}`} onClick={() => toggle(statuses, setStatuses, x)}>{x} <b>{statusCounts[x] || 0}</b></button>)}</div></fieldset>
+          <fieldset><legend>Payment</legend><div className="chips">{PAYMENTS.map(x => <button key={x} className={`chip ${pays.includes(x) ? "active" : ""}`} onClick={() => toggle(pays, setPays, x)}>{x}</button>)}</div></fieldset>
+          <fieldset><legend>Courier & dates</legend><div className="row wrap">
+            <select value={courierF} onChange={e => setCourierF(e.target.value)} aria-label="Tracking filter"><option value="any">Any tracking</option><option value="with">Has tracking ID</option><option value="without">No tracking ID</option></select>
+            <label className="inl">From <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></label>
+            <label className="inl">To <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></label>
+            <label className="inl"><input type="checkbox" checked={dueOnly} onChange={e => setDueOnly(e.target.checked)} /> Has due only</label></div></fieldset>
+          <div className="row"><button className="btn sm" onClick={clearFilters}>Clear all filters</button></div>
+        </div>}
+        <div className="chips smartchips">
+          <button className={`chip ${smart === "all" ? "active" : ""}`} onClick={() => setSmart("all")}>All orders</button>
+          {SMART.map(([k, label]) => <button key={k} className={`chip ${smart === k ? "active" : ""} ${k === "collect" ? "gold" : ""}`} onClick={() => setSmart(smart === k ? "all" : k)}>{label} <b>{smartCounts[k] || 0}</b></button>)}
+        </div>
 
-      {!loaded ? <div className="empty">Loading orders…</div> : !visible.length ?
-        <div className="empty">{orders.length ? "No orders match your filters." : <>No orders found at <code>/{DB_ROOT}/orders</code>. Add one or check the database path and rules.</>}</div> : <>
-        <div className="tablewrap"><table>
-          <thead><tr><th>#</th><th>Customer</th><th>Items</th><th>Customization</th><th>Bill / Paid / Due</th><th>Payment</th><th>Status</th><th>Courier</th><th>Created</th><th /></tr></thead>
-          <tbody>{visible.map(o => <tr key={o.id} onClick={() => setSelected(o.id)}>
-            <td className="nowrap"><span className="serialtag">#{serials[o.id]}</span></td>
-            <td><strong>{o.customerName || "—"}</strong>{o.customerDetails && <small className="pre">{o.customerDetails}</small>}<small>{o.orderDate}</small></td>
-            <td><ItemChips o={o} /></td>
-            <td className="pre">{o.instructions}</td>
-            <td><BillCell o={o} /></td>
-            <td>{quickSelect(o, "paymentStatus", PAYMENTS, payTone)}</td>
-            <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}<CollectTag o={o} /><ChargeTag o={o} /></td>
-            <td>{o.courierId}{o.courierId && <small><SfPill o={o} /></small>}{o.trackingUrl && <small><a href={o.trackingUrl} target="_blank" rel="noreferrer">Track parcel ↗</a></small>}<small>{o.deliveryStatus}</small></td>
-            <td className="nowrap">{fmtDate(o.createdAt)}</td>
-            <td className="nowrap"><button className="btn sm" title="Print sticker" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️</button> <button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
-          </tr>)}</tbody></table></div>
+        {picked.size > 0 && <div className="bulkbar" role="toolbar" aria-label="Bulk actions">
+          <b>{picked.size} selected</b>
+          <select aria-label="Bulk status" value="" onChange={e => { bulkSet("orderStatus", e.target.value); e.target.value = ""; }}><option value="">Set status…</option>{STATUSES.map(x => <option key={x}>{x}</option>)}</select>
+          <select aria-label="Bulk payment" value="" onChange={e => { bulkSet("paymentStatus", e.target.value); e.target.value = ""; }}><option value="">Set payment…</option>{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select>
+          <button className="btn sm" disabled={sync.busy} onClick={() => syncCourier(orders.filter(o => picked.has(o.id)))}>🔄 Sync courier</button>
+          <button className="btn sm" onClick={() => exportRows("xlsx")}>📗 Excel</button><button className="btn sm" onClick={() => exportRows("csv")}>📄 CSV</button>
+          <button className="btn sm danger" onClick={bulkDelete}>🗑 Delete</button><button className="btn sm ghost" onClick={() => setPicked(new Set())}>Clear</button>
+        </div>}
 
-        <div className="cards">{visible.map(o => <article key={o.id} className="card" onClick={() => setSelected(o.id)}>
-          <div className="cardtop"><span className="serialtag">#{serials[o.id]}</span><strong>{o.customerName || "—"}</strong><small>{o.orderDate}</small></div>
-          <ItemChips o={o} />
-          <BillCell o={o} />
-          {o.customerDetails && <p className="clip">{o.customerDetails}</p>}
-          {o.trackingUrl && <a href={o.trackingUrl} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}>Track delivery ↗</a>}
-          <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
-            <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><CollectTag o={o} /><ChargeTag o={o} /></>}<button className="btn sm" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️ Print</button></div>
-        </article>)}</div></>}
-    </section>
-    </>}
-    <footer>3D Bee Order Desk · live Firebase sync · {visible.length} of {orders.length} orders shown · {lastSynced ? `Last sync ${lastSynced.toLocaleTimeString()}` : "Waiting for sync"}</footer>
+        {!loaded ? <div className="empty">Loading orders…</div> : !visible.length ?
+          <div className="empty">{orders.length ? <>No orders match your filters. <button className="btn sm" onClick={clearFilters}>Clear filters</button></> : <>No orders found at <code>/{DB_ROOT}/orders</code>. Add one or check the database path and rules.</>}</div> : <>
+          <div className="tablewrap"><table>
+            <thead><tr><th className="chk"><input type="checkbox" checked={allOnPage} onChange={togglePage} aria-label="Select all on this page" /></th><th>#</th><th>Customer</th><th>Items</th><th className="colx">Customization</th><th>Bill / Paid / Due</th><th>Payment</th><th>Status</th><th>Courier</th><th className="colx">Created</th><th /></tr></thead>
+            <tbody>{pageRows.map(o => { const m = miOf(o); return <tr key={o.id} className={picked.has(o.id) ? "picked" : ""} onClick={() => setSelected(o.id)}>
+              <td className="chk" onClick={e => pick1(o.id, e)}><input type="checkbox" checked={picked.has(o.id)} readOnly aria-label={`Select order ${serials[o.id]}`} /></td>
+              <td className="nowrap"><span className="serialtag">#{serials[o.id]}</span></td>
+              <td><strong>{o.customerName || "—"}</strong>{o.customerDetails && <small className="pre">{o.customerDetails}</small>}<small>{o.orderDate}</small></td>
+              <td><ItemChips o={o} /></td>
+              <td className="pre colx">{o.instructions}</td>
+              <td><BillCell o={o} /></td>
+              <td>{quickSelect(o, "paymentStatus", PAYMENTS, payTone)}</td>
+              <td>{quickSelect(o, "orderStatus", STATUSES, statusTone)}<CollectTag o={o} /><ChargeTag o={o} /></td>
+              <td>{o.courierId}{o.courierId && <small><SfPill o={o} /></small>}<small><TrackLink o={o} cfg={cfg} /></small>{m && m.active && Number.isFinite(m.hours) && <small><span className={`tierbadge ${m.tierMeta.tone}`}>⏱ {fmtDuration(m.hours)}{m.tier ? ` · ${m.tierMeta.label}` : ""}</span></small>}{followUpDue(o, now) && <small><span className="tierbadge blue">📞 Follow up</span></small>}<small>{o.deliveryStatus}</small></td>
+              <td className="nowrap colx">{fmtDate(o.createdAt)}</td>
+              <td className="nowrap"><button className="btn sm" title="Print sticker" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️</button> <button className="btn sm" onClick={e => { e.stopPropagation(); openEdit(o); }}>Edit</button></td>
+            </tr>; })}</tbody></table></div>
+
+          <div className="cards">{pageRows.map(o => { const m = miOf(o); return <article key={o.id} className={`card ${picked.has(o.id) ? "picked" : ""}`} onClick={() => setSelected(o.id)}>
+            <div className="cardtop"><input type="checkbox" checked={picked.has(o.id)} readOnly onClick={e => pick1(o.id, e)} aria-label={`Select order ${serials[o.id]}`} /><span className="serialtag">#{serials[o.id]}</span><strong>{o.customerName || "—"}</strong><small>{o.orderDate}</small></div>
+            <ItemChips o={o} />
+            <BillCell o={o} />
+            {o.customerDetails && <p className="clip">{o.customerDetails}</p>}
+            <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
+              <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><CollectTag o={o} /><ChargeTag o={o} /></>}
+              {m && m.active && Number.isFinite(m.hours) && <span className={`tierbadge ${m.tierMeta.tone}`}>⏱ {fmtDuration(m.hours)}</span>}</div>
+            <div className="row wrap"><TrackLink o={o} cfg={cfg} /><button className="btn sm" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️ Print</button></div>
+          </article>; })}</div>
+
+          <div className="pager">
+            <span>{(curPage - 1) * pageSize + 1}–{Math.min(curPage * pageSize, visible.length)} of {visible.length}{visible.length !== orders.length ? ` (filtered from ${orders.length})` : ""}</span>
+            <div className="row"><button className="btn sm" disabled={curPage <= 1} onClick={() => setPage(curPage - 1)} aria-label="Previous page">‹ Prev</button><span>Page {curPage} / {pageCount}</span><button className="btn sm" disabled={curPage >= pageCount} onClick={() => setPage(curPage + 1)} aria-label="Next page">Next ›</button>
+              <select value={pageSize} onChange={e => setPageSize(Number(e.target.value))} aria-label="Rows per page">{[25, 50, 100].map(n => <option key={n} value={n}>{n} / page</option>)}</select></div>
+          </div></>}
+      </section>}
+      </main>
+      <footer>3D Bee Order Desk · live Firebase sync · times in Asia/Dhaka · {lastSynced ? `Last data update ${lastSynced.toLocaleTimeString("en-GB", { timeZone: TZ })}` : "Waiting for sync"}</footer>
+    </div>
+
+    <nav className="bottomnav" aria-label="Sections">{NAV.map(([k, icon, label]) => <button key={k} className={view === k ? "active" : ""} onClick={() => go(k)}><span>{icon}</span><small>{label}</small>{navBadge(k) > 0 && <b className="navbadge">{navBadge(k)}</b>}</button>)}</nav>
 
     {modal && <OrderModal initial={modal.values} editing={!!modal.id} editingId={modal.id} orders={orders} serials={serials} serialNo={modal.id ? serials[modal.id] : nextSerial} prices={prices} onSavePrices={savePrices} busy={busy} onClose={() => setModal(null)} onSave={save} />}
-    {selectedOrder && <Drawer order={selectedOrder} serial={serials[selectedOrder.id]} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} onRecordPayment={recordPayment} onDeliveryChargePaid={markDeliveryChargePaid} onCreateCourier={createSteadfastOrder} courierBusy={courierBusy} onSync={o => syncCourier([o])} syncBusy={sync.busy} />}
+    {selectedOrder && <Drawer order={selectedOrder} serial={serials[selectedOrder.id]} cfg={cfg} now={now} orders={orders} serials={serials} onOpen={setSelected} onNote={changeNote} onFollowUp={setFollowUp} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} onRecordPayment={recordPayment} onDeliveryChargePaid={markDeliveryChargePaid} onCreateCourier={createSteadfastOrder} courierBusy={courierBusy} onSync={o => syncCourier([o])} syncBusy={sync.busy} />}
     {toast && <div className={`toast ${toast.bad ? "bad" : ""}`} role="status">{toast.text}</div>}
   </div>;
 }
@@ -705,5 +894,5 @@ export default function Home() {
   if (authError) return <main className="loginwrap"><section className="logincard"><div className="logo">🐝</div><h1>3D Bee setup needed</h1><p className="alert">{authError}</p><p>In Netlify, open <strong>Site configuration → Environment variables</strong>, add the missing values, then choose <strong>Deploys → Trigger deploy → Clear cache and deploy site</strong>.</p></section></main>;
   if (user === undefined) return <div className="boot">Loading…</div>;
   if (REQUIRE_LOGIN && !user) return <Login />;
-  return <Dashboard user={user} />;
+  return <Desk user={user} />;
 }

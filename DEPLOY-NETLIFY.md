@@ -53,3 +53,38 @@ Step 0 er variables Netlify site e age boshiye nio.
 - Order drawer → **🖨️ Print sticker (Bluetooth)**. Printer: JP-PT265 (TSC / TSPL), sticker size dropdown default 40×30mm.
 - Web Bluetooth shudhu **HTTPS** e (Netlify e ache) ar **Android Chrome / desktop Chrome** e cholbe. iPhone Safari e hobe na.
 - Order e **Tracking / parcel ID** na thakle sticker print hobe na.
+
+## v3: automation, monitoring and security setup
+
+### 1. Environment variables (Netlify > Site configuration > Environment variables)
+| Variable | Needed for |
+|---|---|
+| `STEADFAST_API_KEY`, `STEADFAST_SECRET_KEY` | all Steadfast features (already required) |
+| `FIREBASE_SERVICE_ACCOUNT` | background sync every 10 min **and** the webhook (writes to Firebase while the dashboard is closed). Paste the whole service-account JSON (or its base64). |
+| `STEADFAST_WEBHOOK_TOKEN` | webhook authentication. Choose a long random string. |
+
+Without `FIREBASE_SERVICE_ACCOUNT` the dashboard still syncs, but only while it is open (browser auto-sync every 5 min and on tab focus).
+Settings > "Automation & connection status" shows which of these are active.
+
+### 2. Steadfast webhook (instant updates)
+In the Steadfast merchant panel add a webhook with URL `https://YOUR-SITE.netlify.app/.netlify/functions/steadfast-webhook`
+and the same value as `STEADFAST_WEBHOOK_TOKEN` as the Bearer token. The scheduled sync keeps running as a safety net, so a missed webhook is harmless.
+The payload fields used are `notification_type`, `consignment_id`, `invoice`, `status`, `cod_amount`, `delivery_charge`, `tracking_message`, `updated_at`.
+Check that field list against the webhook section of your own Steadfast account docs; unknown/unmatched events are answered with 200 and ignored.
+
+### 3. Tracking links
+Steadfast's own tracking link is saved when the API returns one. If you know the official tracking page address, put it in
+Settings > Tracking link, e.g. `https://example.com/track/{code}` (`{code}` = tracking code, `{id}` = consignment id). No address is built in or guessed.
+
+### 4. Delay thresholds
+Settings > Delivery delay thresholds (default 24 / 48 / 72 / 96 hours, "stuck" after 24 h without a courier update). Stored in Firebase at `settings/monitor`.
+
+### 5. Security checklist
+- Firebase Console > Authentication > Settings: **disable user sign-ups** (only you should be able to log in). The database rules allow any *signed-in* user.
+- Optional, stricter rules (replace the email): `".read": "auth != null && auth.token.email == 'you@example.com'"` and the same for `.write`.
+- Steadfast keys and the service account live only in Netlify environment variables, never in `NEXT_PUBLIC_*` and never in git (`.env.local` is git-ignored).
+- Security headers are set in `netlify.toml`.
+
+### 6. Tests
+- `npm test` - unit + server tests (monitoring logic, webhook, scheduled sync, duplicate-parcel protection) - no network needed.
+- `npm run qa` - builds a QA bundle with an in-memory Firebase stand-in (`qa/`, never used in production) and drives the real UI in Chromium with Playwright (desktop, mobile, dark mode). Needs `pip install playwright openpyxl` and `playwright install chromium`.

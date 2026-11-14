@@ -9,7 +9,9 @@
     "dev:all": "node scripts/dev-all.mjs",
     "dev:next": "next dev",
     "deploy": "npx netlify-cli deploy --prod --build",
-    "deploy:preview": "npx netlify-cli deploy --build"
+    "deploy:preview": "npx netlify-cli deploy --build",
+    "test": "node --test tests/*.test.mjs",
+    "qa": "sh qa/build.sh && python3 qa/e2e.py"
   },
   "dependencies": {
     "firebase": "^11.6.0",

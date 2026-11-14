@@ -76,7 +76,7 @@ export default function Courier({ orders, sync, onSync, autoSync, setAutoSync, o
         <button className="btn primary" disabled={sync.busy} onClick={() => onSync(sfOrders.filter(o => !["delivered", "cancelled"].includes(sfGroup(o))))}>{sync.busy ? `Syncing ${sync.done}/${sync.total}…` : "🔄 Sync active parcels"}</button>
         <button className="btn" disabled={sync.busy} onClick={() => onSync(sfOrders, false, true)}>Sync everything</button>
         <label className="switch"><input type="checkbox" checked={autoSync} onChange={e => setAutoSync(e.target.checked)} />Auto-sync every 15 min</label>
-        <span className="hint">{sync.at ? `Last sync ${sync.at.toLocaleTimeString()}` : "Not synced in this session"}</span>
+        <span className="hint">{sync.at ? `Last sync ${sync.at.toLocaleTimeString("en-GB", { timeZone: "Asia/Dhaka" })}` : "Not synced in this session"}</span>
       </div>
       {sync.busy && <div className="progress"><i style={{ width: `${pct}%` }} /></div>}
     </section>

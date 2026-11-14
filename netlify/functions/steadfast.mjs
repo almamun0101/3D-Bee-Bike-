@@ -1,26 +1,37 @@
-import { verifyUser } from "../shared/steadfast.mjs";
+import { json, sf, sfPost, verifyUser, missingCreds } from "../shared/steadfast.mjs";
 
-export default async (request) => {
-  if (request.method !== "POST") return new Response(JSON.stringify({ error: "Method not allowed" }), { status: 405, headers: { "Content-Type": "application/json" } });
+// Create a Steadfast parcel. Safe against double-booking:
+//  1. the same invoice is never sent twice at the same time (in-flight lock),
+//  2. Steadfast is asked first whether this invoice already exists (status_by_invoice) -> 409 instead of a second parcel,
+//  3. a timeout is reported as "unsure" and never retried automatically.
+const inflight = new Set();
+const REQUIRED = ["invoice", "recipient_name", "recipient_phone", "recipient_address", "cod_amount"];
+
+export default async request => {
+  if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
   const auth = await verifyUser(request);
   if (auth.error) return auth.error;
-  const apiKey = process.env.STEADFAST_API_KEY;
-  const secretKey = process.env.STEADFAST_SECRET_KEY;
-  if (!apiKey || !secretKey) return new Response(JSON.stringify({ error: "Steadfast credentials are missing. Add STEADFAST_API_KEY and STEADFAST_SECRET_KEY in Netlify environment variables." }), { status: 503, headers: { "Content-Type": "application/json" } });
+  if (missingCreds()) return json({ error: "Steadfast credentials are missing. Add STEADFAST_API_KEY and STEADFAST_SECRET_KEY in Netlify environment variables." }, 503);
+  let body; try { body = await request.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
+  for (const k of REQUIRED) if (body[k] === undefined || body[k] === null || body[k] === "") return json({ error: `Missing required field: ${k}` }, 400);
+  const invoice = String(body.invoice).trim();
+  if (!/^[A-Za-z0-9_-]{1,100}$/.test(invoice)) return json({ error: "Invoice may contain only letters, numbers, dash and underscore" }, 400);
+  const cod = Number(body.cod_amount);
+  if (!Number.isFinite(cod) || cod < 0) return json({ error: "cod_amount must be a valid non-negative number" }, 400);
+  const phone = String(body.recipient_phone).replace(/[\s-]/g, "").replace(/^\+?88/, "");
+  if (!/^01\d{9}$/.test(phone)) return json({ error: "Recipient phone must be an 11 digit Bangladesh mobile number (01XXXXXXXXX)" }, 400);
+
+  if (inflight.has(invoice)) return json({ error: "A parcel for this order is already being created. Wait a few seconds.", duplicate: true }, 409);
+  inflight.add(invoice);
   try {
-    const body = await request.json();
-    const required = ["invoice", "recipient_name", "recipient_phone", "recipient_address", "cod_amount"];
-    for (const key of required) if (body[key] === undefined || body[key] === null || body[key] === "") return new Response(JSON.stringify({ error: `Missing required field: ${key}` }), { status: 400, headers: { "Content-Type": "application/json" } });
-    const cod = Number(body.cod_amount);
-    if (!Number.isFinite(cod) || cod < 0) return new Response(JSON.stringify({ error: "cod_amount must be a valid non-negative number" }), { status: 400, headers: { "Content-Type": "application/json" } });
-    const upstream = await fetch("https://portal.packzy.com/api/v1/create_order", {
-      method: "POST", headers: { "Api-Key": apiKey, "Secret-Key": secretKey, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ ...body, cod_amount: cod })
-    });
-    const raw = await upstream.text();
-    let data; try { data = JSON.parse(raw); } catch { data = { message: raw || "Invalid response from Steadfast" }; }
-    return new Response(JSON.stringify(data), { status: upstream.status, headers: { "Content-Type": "application/json" } });
-  } catch (error) {
-    return new Response(JSON.stringify({ error: error.message || "Unable to contact Steadfast" }), { status: 502, headers: { "Content-Type": "application/json" } });
-  }
+    // (2) already on Steadfast?
+    try {
+      const existing = await sf(`status_by_invoice/${encodeURIComponent(invoice)}`);
+      if (existing?.delivery_status) return json({ error: `Steadfast already has a parcel for ${invoice} (status: ${existing.delivery_status}). No second parcel was created.`, duplicate: true, delivery_status: existing.delivery_status }, 409);
+    } catch { /* cannot check (network) - creating below is still protected by timeout handling */ }
+    const { status, data } = await sfPost("create_order", { ...body, invoice, recipient_phone: phone, cod_amount: cod });
+    return json(data, status);
+  } catch (e) {
+    return json({ error: e.message || "Unable to contact Steadfast", ...(e.unsure ? { unsure: true } : {}) }, 502);
+  } finally { inflight.delete(invoice); }
 };
