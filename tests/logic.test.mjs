@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeMonitor, DEFAULT_MONITOR, monitorInfo, tierOf, trackingLinkOf, fmtDuration, fromDhakaInput, toDhakaInput, monitorSummary, followUpDue } from "../app/lib/monitor.js";
-import { buildSyncPatch, codInfo, itemPrice, DEFAULT_PRICES, itemsText, itemsOfOrder } from "../app/lib/shared.js";
+import { buildSyncPatch, codInfo, itemPrice, DEFAULT_PRICES, itemsText, itemsOfOrder, phoneOf, addressOf, trackingIdOf, customerInfoText, orderSummaryText } from "../app/lib/shared.js";
 import { buildAlerts } from "../app/lib/alerts.js";
 
 const cfg = normalizeMonitor(null), H = 3600000, now = Date.parse("2026-11-14T12:00:00Z");
@@ -113,4 +113,18 @@ test("items text mentions Scooter; old orders without vehicle still read as a bi
   assert.equal(itemsText([{ name: "A 1", side: "Front Side", type: "BRTA", qty: 1 }]), "A 1 · Front · BRTA");
   const legacy = itemsOfOrder({ bikeNumbers: "OLD 5", quantity: 2, unitPrice: 300 })[0];
   assert.deepEqual([legacy.vehicle, legacy.side, legacy.qty, legacy.price], ["Bike", "Front Side", 2, 300]);
+});
+
+test("copy helpers: customer info, phone, address, tracking id, full summary", () => {
+  const o = { id: "a", customerName: "Rahim", courierRecipientPhone: "01711111111", courierRecipientAddress: "House 5, Mirpur", bikeNumbers: "DHAKA 1 · Front · BRTA", items: [{ name: "DHAKA 1", vehicle: "Scooter", side: "Back Side", type: "BRTA", qty: 2, price: 500 }], total: 1080, paidAmount: 500, courierId: "9ABC1", instructions: "Black plate" };
+  assert.equal(customerInfoText(o), "Rahim\n01711111111\nHouse 5, Mirpur");
+  assert.equal(trackingIdOf(o), "9ABC1"); assert.equal(trackingIdOf({ steadfastTrackingCode: "TRK9" }), "TRK9"); assert.equal(trackingIdOf({}), "");
+  const sum = orderSummaryText({ ...o, dueAmount: 580 }, 12);
+  assert.match(sum, /^#12 Rahim\n01711111111\nHouse 5, Mirpur\n\nItems: DHAKA 1 · Scooter · Back · BRTA ×2/);
+  assert.match(sum, /Note: Black plate/); assert.match(sum, /Tracking ID: 9ABC1$/); assert.match(sum, /Due ৳580/);
+  // old orders: phone + address come from the single "customer info" text
+  const old = { customerName: "Karim", customerDetails: "01822222222, Road 3, Dhanmondi" };
+  assert.equal(phoneOf(old), "01822222222"); assert.equal(addressOf(old), "Road 3, Dhanmondi");
+  assert.equal(customerInfoText({ customerName: "Only Name" }), "Only Name");
+  assert.doesNotMatch(orderSummaryText({ customerName: "X", items: [{ name: "P", side: "Front Side", type: "BRTA", qty: 1, price: 250 }], total: 250 }, 1), /Tracking ID/);
 });

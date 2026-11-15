@@ -44,6 +44,7 @@ class Fake:
 def new_page(p, fake, w=1440, h=900, scheme="light", mobile=False):
     b = p.chromium.launch()
     ctx = b.new_context(viewport={"width": w, "height": h}, color_scheme=scheme, timezone_id="Asia/Dhaka", accept_downloads=True, has_touch=mobile, is_mobile=mobile)
+    ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=f"http://127.0.0.1:{PORT}")
     page = ctx.new_page()
     errs = []
     page.on("pageerror", lambda e: errs.append(f"pageerror: {e}"))

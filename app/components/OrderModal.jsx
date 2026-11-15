@@ -58,6 +58,12 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
   const [draft, setDraft] = useState(P);
   const [err, setErr] = useState("");
   const topRef = useRef(null);
+  const [copied, setCopied] = useState(false);
+  async function pasteTracking() {
+    try { const t = (await navigator.clipboard.readText()).trim(); if (t) setForm(s => ({ ...s, courierId: t.split(/\s+/)[0] })); else setErr("Clipboard khali."); }
+    catch { setErr("Browser clipboard permission dey nai. Field-e click kore Ctrl+V / paste koro."); }
+  }
+  async function copyTracking() { try { await navigator.clipboard.writeText(form.courierId); setCopied(true); setTimeout(() => setCopied(false), 1300); } catch {} }
 
   const items = form.items;
   const subtotal = items.reduce((s, i) => s + Math.max(0, num(i.qty)) * num(i.price), 0);
@@ -155,6 +161,16 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
       </div>
 
       {err && <div className="alert" role="alert">{err}</div>}
+
+      {/* tracking id: first field, big and easy to paste into */}
+      <div className="trackbox">
+        <div className="trackhead"><b>📦 Parcel tracking ID</b><small>sticker print-e lagbe · pore-o dewa jay</small></div>
+        <div className="trackinput">
+          <input {...f("courierId", { placeholder: "Tracking ID ekhane paste koro", autoComplete: "off", autoCapitalize: "characters", spellCheck: false, "aria-label": "Parcel tracking ID", autoFocus: editing && !form.courierId })} />
+          <button type="button" className="btn sm" onClick={pasteTracking}>📋 Paste</button>
+          {form.courierId && <button type="button" className="btn sm" onClick={copyTracking}>{copied ? "✓ Copied" : "⧉ Copy"}</button>}
+        </div>
+      </div>
 
       {/* 1 · customer */}
       <section className="fsec">
@@ -261,11 +277,6 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
             <label>Delivery charge paid (৳)<input {...f("deliveryChargePaidAmount", { type: "number", min: 0, max: fee, step: "0.01" })} /></label>}
         </div>
       </section>
-
-      {/* tracking id (needed for the sticker; usually added later) */}
-      <label className="trackbox">📦 Tracking / parcel ID <small>(sticker print-e lagbe, pore-o dewa jay)</small>
-        <input {...f("courierId", { placeholder: "Parcel tracking ID boshao", autoComplete: "off", autoCapitalize: "characters", spellCheck: false })} />
-      </label>
 
       <button type="button" className="more-toggle" onClick={() => setShowMore(v => !v)} aria-expanded={showMore}>
         <span>{showMore ? "−" : "+"} More details</span><small>Courier, costs, extra fields</small>

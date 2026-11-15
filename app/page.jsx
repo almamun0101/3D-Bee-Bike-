@@ -5,9 +5,9 @@ import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
 import { printLabel, browserPrint, pdfPreview, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
-import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, codInfo, SMART, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort, VEHICLES } from "./lib/shared";
+import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, codInfo, SMART, phoneOf, addressOf, trackingIdOf, customerInfoText, orderSummaryText, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort, VEHICLES } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
-import SfPill, { ChargeTag, CollectTag, TrackLink } from "./components/SfPill";
+import SfPill, { ChargeTag, CollectTag, TrackLink, CopyBtn } from "./components/SfPill";
 import Monitor from "./components/Monitor";
 import Overview from "./components/Dashboard";
 import Notifications from "./components/Notifications";
@@ -114,6 +114,13 @@ function Drawer({ order, serial, cfg, now, orders, serials, onOpen, onNote, onFo
       <div className="modalhead">
         <div><h2>{serial ? <span className="serialtag">#{serial}</span> : null} {order.customerName || "Unnamed order"}</h2><p>{fmtDate(order.createdAt || order.orderDate)}</p></div>
         <button className="icon" onClick={onClose} aria-label="Close">✕</button>
+      </div>
+      <div className="copybar" aria-label="Copy">
+        <CopyBtn text={customerInfoText(order)} label="📋 Customer info" title="Copy name, phone and address" />
+        <CopyBtn text={phoneOf(order)} label="📞 Phone" title="Copy phone number" />
+        <CopyBtn text={addressOf(order)} label="📍 Address" title="Copy address" />
+        <CopyBtn text={trackingIdOf(order)} label="📦 Tracking ID" title="Copy tracking ID" />
+        <CopyBtn text={orderSummaryText(order, serial)} label="🧾 Full summary" title="Copy customer, items, amount due and tracking ID" />
       </div>
       <div className="drawertags">
         <span className={`pill ${statusTone(order.orderStatus)}`}>{order.orderStatus || "—"}</span> <ChargeTag o={order} />
@@ -832,7 +839,7 @@ function Desk({ user }) {
             <tbody>{pageRows.map(o => { const m = miOf(o); return <tr key={o.id} className={picked.has(o.id) ? "picked" : ""} onClick={() => setSelected(o.id)}>
               <td className="chk" onClick={e => pick1(o.id, e)}><input type="checkbox" checked={picked.has(o.id)} readOnly aria-label={`Select order ${serials[o.id]}`} /></td>
               <td className="nowrap"><span className="serialtag">#{serials[o.id]}</span></td>
-              <td><strong>{o.customerName || "—"}</strong>{o.customerDetails && <small className="pre">{o.customerDetails}</small>}<small>{o.orderDate}</small></td>
+              <td><strong>{o.customerName || "—"}</strong>{o.customerDetails && <small className="pre">{o.customerDetails}</small>}<small>{o.orderDate}</small><span className="inlinecopy" onClick={e => e.stopPropagation()}><CopyBtn text={customerInfoText(o)} label="⧉ Copy info" title="Copy name, phone and address" /></span></td>
               <td><ItemChips o={o} /></td>
               <td className="pre colx">{o.instructions}</td>
               <td><BillCell o={o} /></td>
@@ -851,7 +858,7 @@ function Desk({ user }) {
             <div className="row wrap"><span className={`pill ${payTone(o.paymentStatus)}`}>{o.paymentStatus || "—"}</span>
               <span className={`pill ${statusTone(o.orderStatus)}`}>{o.orderStatus || "—"}</span>{o.courierId && <><SfPill o={o} /><CollectTag o={o} /><ChargeTag o={o} /></>}
               {m && m.active && Number.isFinite(m.hours) && <span className={`tierbadge ${m.tierMeta.tone}`}>⏱ {fmtDuration(m.hours)}</span>}</div>
-            <div className="row wrap"><TrackLink o={o} cfg={cfg} /><button className="btn sm" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️ Print</button></div>
+            <div className="row wrap"><TrackLink o={o} cfg={cfg} /><CopyBtn text={customerInfoText(o)} label="⧉ Customer info" /><button className="btn sm" onClick={e => { e.stopPropagation(); printLabel(o, serials[o.id]); }}>🖨️ Print</button></div>
           </article>; })}</div>
 
           <div className="pager">

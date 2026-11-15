@@ -41,3 +41,10 @@ export function TrackLink({ o, cfg, showId }) {
     {id && <button type="button" className="trackbtn ghost" title="Copy tracking ID" onClick={async e => { stop(e); if (await copyText(id)) { setCopied(true); setTimeout(() => setCopied(false), 1400); } }}>{copied ? "✓ Copied" : showId ? `⧉ ${id}` : "⧉ Copy ID"}</button>}
   </span>;
 }
+
+// Generic copy button: shows "✓ Copied" for a moment. Renders nothing when there is nothing to copy.
+export function CopyBtn({ text, label, title, className = "trackbtn ghost" }) {
+  const [done, setDone] = useState(false);
+  if (!String(text || "").trim()) return null;
+  return <button type="button" className={className} title={title || "Copy"} onClick={async e => { e.stopPropagation(); if (await copyText(String(text))) { setDone(true); setTimeout(() => setDone(false), 1400); } }}>{done ? "✓ Copied" : label}</button>;
+}

@@ -209,3 +209,17 @@ export const SMART = [
   ["attention", "⚠️ Needs attention", o => (isSteadfast(o) && (sfGroup(o) === "hold" || sfGroup(o) === "error")) || (isReturned(o) && !/cancel/i.test(o.orderStatus || ""))],
   ["unpaid", "💸 Has due", o => !isDone(o.orderStatus) && getDue(o) > 0]
 ];
+
+// ── copy helpers (customer info / courier message) ──
+const PHONE_RX = /01[3-9]\d{8}/;
+export const phoneOf = o => String(o?.courierRecipientPhone || (String(o?.customerDetails || "").match(PHONE_RX) || [""])[0]).trim();
+export const addressOf = o => String(o?.courierRecipientAddress || String(o?.customerDetails || "").replace(PHONE_RX, "").replace(/^[\s·,|/-]+|[\s·,|/-]+$/g, "")).trim();
+export const trackingIdOf = o => String(o?.courierId || o?.steadfastTrackingCode || "").trim();
+export const customerInfoText = o => [o?.customerName, phoneOf(o), addressOf(o)].map(x => String(x || "").trim()).filter(Boolean).join("\n");
+// everything a rider / courier / customer chat needs in one paste
+export function orderSummaryText(o, serial) {
+  const total = num(o?.total), due = getDue(o), paid = Math.max(0, total - due), id = trackingIdOf(o);
+  return [`#${serial ?? "?"} ${o?.customerName || ""}`.trim(), phoneOf(o), addressOf(o), "",
+    `Items: ${itemsText(itemsOfOrder(o))}`, o?.instructions ? `Note: ${o.instructions}` : "",
+    `Total ${money(total)} · Paid ${money(paid)} · Due ${money(due)}`, id ? `Tracking ID: ${id}` : ""].filter((x, i, a) => x !== "" || (a[i - 1] !== "" && i > 0)).join("\n").trim();
+}

@@ -16,6 +16,19 @@ def toast(page):
         try: return page.locator(sel).first.inner_text(timeout=1500)
         except Exception: pass
     return ""
+
+def contrast(page, sel):
+    return page.evaluate("""(sel) => {
+      const parse = c => { const m = c.match(/[\\d.]+/g).map(Number); return { r: m[0], g: m[1], b: m[2], a: m.length > 3 ? m[3] : 1 }; };
+      const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+      const L = c => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+      const el = document.querySelector(sel); if (!el) return -1;
+      const fg = parse(getComputedStyle(el).color); let bg = null, n = el;
+      while (n && !bg) { const c = parse(getComputedStyle(n).backgroundColor); if (c.a > 0.9) bg = c; n = n.parentElement; }
+      bg = bg || { r: 255, g: 255, b: 255 };
+      const a = L(fg), b = L(bg); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+    }""", sel)
+def clip(page): return page.evaluate("() => navigator.clipboard.readText()")
 def tab_counts(page): return {re.sub(r"[^A-Za-z-]", "", t.inner_text().split("\n")[0]).strip(): int(re.findall(r"\d+", t.inner_text())[-1]) for t in page.locator(".subtab").all()}
 
 with sync_playwright() as p:
@@ -298,6 +311,42 @@ with sync_playwright() as p:
     check("Default prices saved to Firebase and used immediately", (DB(page, "3dbee/settings/defaultPrices") or {}).get("bikeFront") == 300 and page.locator(".itemrow").first.locator("input[aria-label=Price]").input_value() == "300")
     page.get_by_role("button", name="⚙ Edit prices").click(); page.get_by_label(re.compile("Bike · Front")).fill("250"); page.get_by_role("button", name="Save default prices").click(); page.wait_for_timeout(300)
     page.screenshot(path="/tmp/form-desktop.png"); page.keyboard.press("Escape")
+
+    print("\n[K] Tracking ID on top, readable colours, copy buttons")
+    page.get_by_role("button", name="＋ New order").click(); page.wait_for_selector(".ordermodal")
+    ty = page.locator(".trackbox").bounding_box()["y"]; cy = page.get_by_placeholder("Customer name").bounding_box()["y"]
+    check("Tracking ID box is the FIRST field (above customer)", ty < cy, (ty, cy))
+    page.locator(".trackinput input").fill("SAMPLE-ID-12345")
+    for sel, minr in [(".trackinput input", 7), (".trackhead b", 4.5), (".trackhead small", 4.5)]:
+        r = contrast(page, sel); check(f"Light mode contrast {sel} >= {minr}", r >= minr, round(r, 2))
+    page.evaluate("() => navigator.clipboard.writeText('  TRK123  extra words ')")
+    page.locator(".trackinput input").fill(""); page.get_by_role("button", name="📋 Paste").click(); page.wait_for_timeout(200)
+    check("Paste button fills the tracking ID (first word, trimmed)", page.locator(".trackinput input").input_value() == "TRK123", page.locator(".trackinput input").input_value())
+    page.locator(".trackinput").get_by_role("button", name=re.compile("Copy")).click(); page.wait_for_timeout(150)
+    check("Copy button copies the tracking ID", clip(page) == "TRK123" and "Copied" in page.locator(".trackinput").inner_text())
+    page.get_by_placeholder("Customer name").fill("Tracked Customer"); page.get_by_label("Plate 1", exact=True).fill("TRK 1"); page.get_by_role("button", name="＋ Add order").click(); page.wait_for_timeout(600)
+    tr = next(o for o in DB(page, "3dbee/orders").values() if o.get("customerName") == "Tracked Customer")
+    check("Tracking ID typed at the top is saved on the order", tr["courierId"] == "TRK123")
+    # copy buttons in drawer / table / monitor
+    page.locator(".search").fill("t3"); page.wait_for_timeout(250)
+    t3 = next(o for o in DB(page, "3dbee/orders").values() if o.get("customerName") == "Customer t3")
+    page.locator(".tablewrap tbody tr").first.get_by_role("button", name="⧉ Copy info").click(); page.wait_for_timeout(150)
+    check("Table: 'Copy info' copies name + phone + address", clip(page) == f"{t3['customerName']}\n{t3['courierRecipientPhone']}\n{t3['courierRecipientAddress']}", clip(page))
+    page.locator(".tablewrap tbody tr").first.click(); page.wait_for_selector(".drawer")
+    bar = page.locator(".drawer .copybar")
+    bar.get_by_role("button", name="📋 Customer info").click(); page.wait_for_timeout(120)
+    check("Drawer: Customer info copied", clip(page).startswith("Customer t3\n0171"))
+    bar.get_by_role("button", name="📞 Phone").click(); page.wait_for_timeout(120); check("Drawer: Phone copied", clip(page) == t3["courierRecipientPhone"], clip(page))
+    bar.get_by_role("button", name="📍 Address").click(); page.wait_for_timeout(120); check("Drawer: Address copied", clip(page) == t3["courierRecipientAddress"], clip(page))
+    bar.get_by_role("button", name="📦 Tracking ID").click(); page.wait_for_timeout(120); check("Drawer: Tracking ID copied", clip(page) == "9000t3", clip(page))
+    bar.get_by_role("button", name="🧾 Full summary").click(); page.wait_for_timeout(120); sm = clip(page)
+    check("Drawer: Full summary has name, items, due and tracking ID", "Customer t3" in sm and "Items:" in sm and "Due ৳" in sm and "Tracking ID: 9000t3" in sm, sm)
+    check("Copy button confirms with 'Copied'", "Copied" in bar.inner_text())
+    page.keyboard.press("Escape")
+    goto(page, "Monitor"); page.wait_for_timeout(300)
+    page.locator(".monrow", has_text="Customer t3").get_by_role("button", name="⧉ Copy info").click(); page.wait_for_timeout(120)
+    check("Monitor: 'Copy info' works", clip(page).startswith("Customer t3\n"))
+    goto(page, "Orders"); page.locator(".search").fill("")
     check("No uncaught errors on desktop (the 409 is the intended duplicate-parcel response)", not [e for e in errs if "ERR_NAME_NOT_RESOLVED" not in e and "409" not in e], errs)
     ctx.close(); b.close()
 
@@ -331,6 +380,10 @@ with sync_playwright() as p:
     b, ctx, page, errs3 = new_page(p, fake3, 1440, 900, scheme="dark")
     page.goto(f"http://127.0.0.1:{PORT}/"); page.wait_for_selector(".app"); page.wait_for_timeout(5200)
     check("Auto-sync ran on its own and switched statuses", "status" in fake3.calls and order(page, "t1")["orderStatus"] == "Completed", (fake3.calls, order(page, "t1")["orderStatus"]))
+    page.locator(".sidenav").get_by_text("Orders", exact=True).click(); page.get_by_role("button", name="＋ New order").click(); page.wait_for_selector(".ordermodal"); page.locator(".trackinput input").fill("SAMPLE-ID-12345"); page.wait_for_timeout(200)
+    for sel, minr in [(".trackinput input", 7), (".trackhead b", 4.5), (".trackhead small", 4.5)]:
+        r = contrast(page, sel); check(f"Dark mode contrast {sel} >= {minr}", r >= minr, round(r, 2))
+    page.screenshot(path="/tmp/form-dark.png"); page.keyboard.press("Escape"); page.locator(".sidenav").get_by_text("Dashboard", exact=True).click(); page.wait_for_timeout(200)
     page.screenshot(path="/tmp/dark-dash.png"); goto(page, "Monitor"); page.wait_for_timeout(300); page.screenshot(path="/tmp/dark-monitor.png")
     check("No uncaught errors in dark mode / auto-sync", not [e for e in errs3 if "ERR_NAME_NOT_RESOLVED" not in e], errs3)
     ctx.close(); b.close()

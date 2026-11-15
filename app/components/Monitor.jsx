@@ -1,7 +1,8 @@
 "use client";
 import { useMemo, useState } from "react";
+import { customerInfoText } from "../lib/shared.js";
 import { monitorInfo, monitorSummary, followUpDue, hasFollowUp, fmtDuration, fmtAgo, fmtDhaka, toDhakaInput, fromDhakaInput, TIERS, HOUR } from "../lib/monitor";
-import SfPill, { CollectTag, TrackLink } from "./SfPill";
+import SfPill, { CollectTag, TrackLink, CopyBtn } from "./SfPill";
 
 const TABS = [
   ["active", "🚚 Active", m => m.active], ["delayed", "⏱ Delayed", m => m.delayed], ["stuck", "🧱 Stuck", m => m.stuck],
@@ -67,7 +68,7 @@ export default function Monitor({ orders, cfg, serials, now, sync, onSync, onOpe
           const due = followUpDue(o, now);
           return <article key={o.id} className={`monrow t${m.tier} ${m.stuck ? "stuck" : ""} ${m.failed ? "failed" : ""}`} onClick={() => onOpen(o.id)}>
             <div className="mcust"><span className="serialtag">#{serials[o.id]}</span><strong>{o.customerName || "—"}</strong>
-              {o.courierRecipientPhone && <a className="phonelink" href={`tel:${o.courierRecipientPhone}`} onClick={e => e.stopPropagation()}>📞 {o.courierRecipientPhone}</a>}</div>
+              {o.courierRecipientPhone && <a className="phonelink" href={`tel:${o.courierRecipientPhone}`} onClick={e => e.stopPropagation()}>📞 {o.courierRecipientPhone}</a>}<CopyBtn text={customerInfoText(o)} label="⧉ Copy info" title="Copy name, phone and address" /></div>
             <div className="mparcel"><b>{o.courierId || o.steadfastTrackingCode || "—"}</b><SfPill o={o} /><TrackLink o={o} cfg={cfg} /></div>
             <div className="mtime">
               <strong className={`tierbadge ${m.tierMeta.tone}`}>{m.closed ? (m.delivered ? "Delivered in " : "Closed after ") : ""}{fmtDuration(m.hours)}</strong>
