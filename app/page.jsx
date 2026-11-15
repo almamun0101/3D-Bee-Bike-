@@ -5,7 +5,7 @@ import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
 import { printLabel, browserPrint, pdfPreview, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
-import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, codInfo, SMART, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort } from "./lib/shared";
+import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, codInfo, SMART, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort, VEHICLES } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
 import SfPill, { ChargeTag, CollectTag, TrackLink } from "./components/SfPill";
 import Monitor from "./components/Monitor";
@@ -76,7 +76,7 @@ function ItemChips({ o }) {
   const has = Array.isArray(o.items) && o.items.length;
   return <div className="itemchips">{itemsOfOrder(o).map((i, k) => <span key={k} className={`ichip ${has && i.type === "Custom" ? "custom" : ""}`}>
     <b>{i.name || "—"}</b>
-    {has ? <small>{sideShort(i.side)} · {i.type}{num(i.qty) > 1 ? ` ×${num(i.qty)}` : ""}</small> : (num(o.quantity) > 1 ? <small>×{num(o.quantity)}</small> : null)}
+    {has ? <small>{i.vehicle === "Scooter" ? "🛵 " : ""}{sideShort(i.side)} · {i.type}{num(i.qty) > 1 ? ` ×${num(i.qty)}` : ""}</small> : (num(o.quantity) > 1 ? <small>×{num(o.quantity)}</small> : null)}
   </span>)}</div>;
 }
 
@@ -188,7 +188,7 @@ function Drawer({ order, serial, cfg, now, orders, serials, onOpen, onNote, onFo
         {itemsOfOrder(order).map((i, k) => {
           const has = Array.isArray(order.items) && order.items.length;
           return <div key={k} className={`ditem ${has && i.type === "Custom" ? "custom" : ""}`}>
-            <div><strong>{i.name || "—"}</strong>{has && <small>{i.side} · {i.type}{i.type === "Custom" ? " ★" : ""}</small>}</div>
+            <div><strong>{i.name || "—"}</strong>{has && <small>{i.vehicle === "Scooter" ? "🛵 Scooter" : "🏍 Bike"} · {i.side} · {i.type}{i.type === "Custom" ? " ★" : ""}</small>}</div>
             <span>{num(i.qty)} × {money(i.price)}</span><b>{money(num(i.qty) * num(i.price))}</b>
           </div>;
         })}
@@ -524,7 +524,7 @@ function Desk({ user }) {
   async function save(form) {
     setBusy(true);
     const items = (Array.isArray(form.items) ? form.items : []).filter(i => String(i.name || "").trim()).map(i => ({
-      name: String(i.name).trim(), side: i.side, type: i.type, qty: Math.max(1, num(i.qty)), price: num(i.price)
+      name: String(i.name).trim(), vehicle: VEHICLES.includes(i.vehicle) ? i.vehicle : "Bike", side: i.side, type: i.type, qty: Math.max(1, num(i.qty)), price: num(i.price)
     }));
     const qty = items.reduce((s, i) => s + i.qty, 0), subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
     const price = qty ? Math.round(subtotal / qty * 100) / 100 : 0;

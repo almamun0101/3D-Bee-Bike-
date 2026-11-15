@@ -23,5 +23,10 @@ export const onValue = (r, cb, err) => {
 };
 export const set = async (r, v) => { put(r.path, clone(v)); window.__qa?.log.push(["set", r.path]); notify(); };
 export const update = async (r, patch) => { Object.entries(patch).forEach(([k, v]) => put(`${r.path}/${k}`, clone(v))); window.__qa?.log.push(["update", r.path, Object.keys(patch)]); notify(); };
-export const push = async (r, v) => { const key = "-qa" + Math.random().toString(36).slice(2, 10); put(`${r.path}/${key}`, clone(v)); notify(); return { key }; };
+// like Firebase: push(ref) returns a reference immediately; push(ref, value) also writes and is awaitable
+export const push = (r, v) => {
+  const key = "-qa" + Math.random().toString(36).slice(2, 10), path = `${r.path}/${key}`, out = { path, key };
+  if (v !== undefined) { put(path, clone(v)); notify(); out.then = (res, rej) => Promise.resolve({ path, key }).then(res, rej); }
+  return out;
+};
 export const remove = async r => { put(r.path, null); notify(); };

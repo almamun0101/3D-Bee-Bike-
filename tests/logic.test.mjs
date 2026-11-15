@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizeMonitor, DEFAULT_MONITOR, monitorInfo, tierOf, trackingLinkOf, fmtDuration, fromDhakaInput, toDhakaInput, monitorSummary, followUpDue } from "../app/lib/monitor.js";
-import { buildSyncPatch, codInfo } from "../app/lib/shared.js";
+import { buildSyncPatch, codInfo, itemPrice, DEFAULT_PRICES, itemsText, itemsOfOrder } from "../app/lib/shared.js";
 import { buildAlerts } from "../app/lib/alerts.js";
 
 const cfg = normalizeMonitor(null), H = 3600000, now = Date.parse("2026-11-14T12:00:00Z");
@@ -95,4 +95,22 @@ test("sync patch: tracking fields, event log, no duplicate events", () => {
   const b2 = { ...base, ...r.patch };
   r = buildSyncPatch(b2, { status: "pending" }, ago(-1)); assert.equal(r.patch.steadfastEvents, undefined); assert.equal(r.changed, false);
   r = buildSyncPatch(b2, { status: "cancelled" }, ago(-2)); assert.deepEqual([r.patch.orderStatus, r.patch.steadfastReturnedAt], ["Returned", ago(-2)]);
+});
+
+test("pricing: Front bike 250, Front scooter 350, Back 500; custom size adds only the configured extra", () => {
+  assert.deepEqual(DEFAULT_PRICES, { bikeFront: 250, scooterFront: 350, bikeBack: 500, scooterBack: 500, customExtra: 0 });
+  const p = (v, s, t, P) => itemPrice(v, s, t, P);
+  assert.equal(p("Bike", "Front Side", "BRTA"), 250); assert.equal(p("Scooter", "Front Side", "BRTA"), 350);
+  assert.equal(p("Bike", "Back Side", "BRTA"), 500); assert.equal(p("Scooter", "Back Side", "BRTA"), 500);
+  assert.equal(p("Bike", "Front Side", "Custom"), 250, "custom costs the same until an extra is set");
+  assert.equal(p("Scooter", "Back Side", "Custom", { ...DEFAULT_PRICES, customExtra: 50 }), 550);
+  assert.equal(p(undefined, undefined, undefined), 250, "unknown values fall back to Bike / Front / BRTA");
+  assert.equal(p("Bike", "Front Side", "BRTA", { bikeFront: "300" }), 300, "string prices from Firebase are numbers");
+});
+
+test("items text mentions Scooter; old orders without vehicle still read as a bike", () => {
+  assert.equal(itemsText([{ name: "A 1", vehicle: "Scooter", side: "Back Side", type: "Custom", qty: 2 }]), "A 1 · Scooter · Back · Custom ×2");
+  assert.equal(itemsText([{ name: "A 1", side: "Front Side", type: "BRTA", qty: 1 }]), "A 1 · Front · BRTA");
+  const legacy = itemsOfOrder({ bikeNumbers: "OLD 5", quantity: 2, unitPrice: 300 })[0];
+  assert.deepEqual([legacy.vehicle, legacy.side, legacy.qty, legacy.price], ["Bike", "Front Side", 2, 300]);
 });

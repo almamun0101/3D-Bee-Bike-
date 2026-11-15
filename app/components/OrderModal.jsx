@@ -1,9 +1,20 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
-import { money, num, normKey, shortDate, SIDES, TYPES, STATUSES, PAYMENTS, DEFAULT_PRICES, priceKey, sideShort, buildPlateIndex, findPlate } from "../lib/shared";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { money, num, normKey, shortDate, SIDES, TYPES, STATUSES, PAYMENTS, VEHICLES, DEFAULT_PRICES, itemPrice, sideShort, buildPlateIndex, findPlate } from "../lib/shared";
 
-const PRICE_FIELDS = [["brtaFront", "BRTA · Front"], ["brtaBack", "BRTA · Back"], ["customFront", "Custom · Front"], ["customBack", "Custom · Back"]];
+const PRICE_FIELDS = [["bikeFront", "🏍 Bike · Front"], ["scooterFront", "🛵 Scooter · Front"], ["bikeBack", "🏍 Bike · Back"], ["scooterBack", "🛵 Scooter · Back"], ["customExtra", "★ Custom size extra"]];
+const PHONE_RE = /01[3-9]\d{8}/;
+const cleanPhone = v => String(v || "").replace(/[\s-]/g, "").replace(/^\+?88/, "");
+const VEH_LABEL = { Bike: "🏍 Bike", Scooter: "🛵 Scooter" }, SIDE_LABEL = { "Front Side": "Front", "Back Side": "Back" }, TYPE_LABEL = { BRTA: "BRTA", Custom: "★ Custom" };
+const AUTO_PAY = ["Unpaid", "Paid Advance", "Paid Full"];
+
+// one-tap choice buttons (much faster than dropdowns, especially on a phone)
+function Seg({ value, options, labels, onChange, label }) {
+  return <div className="seg" role="radiogroup" aria-label={label}>
+    {options.map(o => <button key={o} type="button" role="radio" aria-checked={value === o} className={`segbtn ${value === o ? "active" : ""}`} onClick={() => onChange(o)}>{labels?.[o] ?? o}</button>)}
+  </div>;
+}
 
 // "Already ordered before" note shown under an item / customer name while typing
 function Seen({ exact, similar, serials }) {
@@ -19,16 +30,20 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
   const P = { ...DEFAULT_PRICES, ...(prices || {}) };
   const uid = useRef(0);
   const mk = (it = {}, focus = false) => {
-    const side = SIDES.includes(it.side) ? it.side : "Front Side", type = TYPES.includes(it.type) ? it.type : "BRTA";
-    const def = P[priceKey(type, side)];
+    const vehicle = VEHICLES.includes(it.vehicle) ? it.vehicle : "Bike", side = SIDES.includes(it.side) ? it.side : "Front Side", type = TYPES.includes(it.type) ? it.type : "BRTA";
+    const def = itemPrice(vehicle, side, type, P);
     const price = it.price === undefined || it.price === "" ? def : num(it.price);
-    return { uid: ++uid.current, name: it.name || "", side, type, qty: Math.max(1, num(it.qty) || 1), price, edited: price !== def, focus };
+    return { uid: ++uid.current, name: it.name || "", vehicle, side, type, qty: Math.max(1, num(it.qty) || 1), price, edited: price !== def, focus };
   };
 
   const [form, setForm] = useState(() => {
     const fee = initial.deliveryFee ?? "80";
+    const det = String(initial.customerDetails || "");
     return {
       ...initial,
+      // phone + address are first-class fields now (old orders: taken from "customer info")
+      courierRecipientPhone: initial.courierRecipientPhone || (det.match(PHONE_RE) || [""])[0],
+      courierRecipientAddress: initial.courierRecipientAddress || det.replace(PHONE_RE, "").replace(/^[\s·,|/-]+|[\s·,|/-]+$/g, "").trim(),
       orderDate: initial.orderDate || new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Dhaka" }),
       deliveryFee: String(fee),
       deliveryArea: Number(fee) === 130 ? "Outside Dhaka" : Number(fee) === 80 ? "Inside Dhaka" : Number(fee) === 0 ? "No delivery" : "Custom amount",
@@ -42,6 +57,7 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
   const [showPrices, setShowPrices] = useState(false);
   const [draft, setDraft] = useState(P);
   const [err, setErr] = useState("");
+  const topRef = useRef(null);
 
   const items = form.items;
   const subtotal = items.reduce((s, i) => s + Math.max(0, num(i.qty)) * num(i.price), 0);
@@ -49,34 +65,49 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
   const fee = num(form.deliveryFee);
   const total = subtotal + fee;
   const due = Math.max(0, total - num(form.paidAmount) - num(form.deliveryChargePaidAmount));
+  const namedItems = items.filter(i => i.name.trim()).length;
+  const phone = cleanPhone(form.courierRecipientPhone);
+  const phoneOk = /^01\d{9}$/.test(phone);
 
+  const withAutoPay = next => {
+    if (!AUTO_PAY.includes(next.paymentStatus)) return next;
+    const sub = next.items.reduce((s, i) => s + Math.max(0, num(i.qty)) * num(i.price), 0), t = sub + num(next.deliveryFee) - num(next.deliveryChargePaidAmount), paid = num(next.paidAmount);
+    return { ...next, paymentStatus: paid <= 0 ? "Unpaid" : paid >= t ? "Paid Full" : "Paid Advance" };
+  };
   function change(e) {
     const { name, value } = e.target;
-    const next = { ...form, [name]: value };
+    let next = { ...form, [name]: value };
     if (name === "deliveryArea") next.deliveryFee = value === "Inside Dhaka" ? "80" : value === "Outside Dhaka" ? "130" : value === "No delivery" ? "0" : next.deliveryFee;
     if (name === "deliveryFee") next.deliveryArea = Number(value) === 80 ? "Inside Dhaka" : Number(value) === 130 ? "Outside Dhaka" : Number(value) === 0 ? "No delivery" : "Custom amount";
     if (name === "paymentStatus" && value === "Delivery Charge Paid") next.deliveryChargePaidAmount = String(num(next.deliveryFee));
+    if (name === "paidAmount") next = withAutoPay(next);
     setForm(next);
   }
   const f = (name, props = {}) => ({ name, value: form[name] ?? "", onChange: change, ...props });
+  const setPaid = amount => setForm(s => withAutoPay({ ...s, paidAmount: String(Math.max(0, Math.round(amount))) }));
+  const setArea = a => change({ target: { name: "deliveryArea", value: a } });
 
   // ── items ──
   const setItems = fn => setForm(s => ({ ...s, items: fn(s.items) }));
   const patch = (id, p) => setItems(list => list.map(it => {
     if (it.uid !== id) return it;
     const n = { ...it, ...p, focus: false };
-    if (("side" in p || "type" in p) && !n.edited) n.price = P[priceKey(n.type, n.side)];   // option change -> default price (unless you typed your own)
+    if (("vehicle" in p || "side" in p || "type" in p) && !n.edited) n.price = itemPrice(n.vehicle, n.side, n.type, P);   // option change -> default price (unless you typed your own)
     if ("price" in p) n.edited = true;
     return n;
   }));
-  const addItem = () => setItems(list => [...list.map(i => ({ ...i, focus: false })), mk({}, true)]);
+  const addItem = () => setItems(list => { const last = list[list.length - 1] || {}; return [...list.map(i => ({ ...i, focus: false })), mk({ vehicle: last.vehicle, side: last.side, type: last.type }, true)]; });
   const removeItem = id => setItems(list => list.length > 1 ? list.filter(i => i.uid !== id) : list);
   const bump = (it, d) => patch(it.uid, { qty: Math.max(1, num(it.qty) + d) });
+  const resetPrice = it => setItems(list => list.map(x => x.uid === it.uid ? { ...x, price: itemPrice(x.vehicle, x.side, x.type, P), edited: false } : x));
+  const otherSide = s => s === "Front Side" ? "Back Side" : "Front Side";
+  const hasPair = it => items.some(o => o.uid !== it.uid && normKey(o.name) === normKey(it.name) && o.side === otherSide(it.side) && o.vehicle === it.vehicle && o.type === it.type);
+  const addPair = it => setItems(list => { const i = list.findIndex(x => x.uid === it.uid); const copy = [...list]; copy.splice(i + 1, 0, mk({ name: it.name, vehicle: it.vehicle, type: it.type, qty: it.qty, side: otherSide(it.side) })); return copy; });
 
   function saveDefaults() {
     const clean = {}; PRICE_FIELDS.forEach(([k]) => { clean[k] = Math.max(0, num(draft[k])); });
     onSavePrices(clean);
-    setItems(list => list.map(it => it.edited ? it : { ...it, price: clean[priceKey(it.type, it.side)] }));
+    setItems(list => list.map(it => it.edited ? it : { ...it, price: itemPrice(it.vehicle, it.side, it.type, clean) }));
     setShowPrices(false);
   }
 
@@ -86,22 +117,36 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
   const cn = normKey(form.customerName);
   const prevOrders = useMemo(() => cn.length >= 2 ? orders.filter(o => o.id !== editingId && normKey(o.customerName) === cn) : [], [orders, editingId, cn]);
   const lastPrev = prevOrders.slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+  const lastPhone = lastPrev ? (lastPrev.courierRecipientPhone || (String(lastPrev.customerDetails || "").match(PHONE_RE) || [""])[0]) : "";
+  const lastAddr = lastPrev ? (lastPrev.courierRecipientAddress || String(lastPrev.customerDetails || "").replace(PHONE_RE, "").replace(/^[\s·,|/-]+|[\s·,|/-]+$/g, "").trim()) : "";
+  const canReuse = !!(lastPrev && (lastPhone || lastAddr) && (!form.courierRecipientPhone || !form.courierRecipientAddress));
 
   function submit(e) {
-    e.preventDefault();
+    e?.preventDefault();
     const clean = items.filter(i => i.name.trim());
-    if (!form.customerName.trim()) return setErr("Customer name din.");
-    if (!clean.length) return setErr("Kom pokkhe ekta item name / bike number din.");
+    const fail = m => { setErr(m); topRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }); };
+    if (!form.customerName.trim()) return fail("Customer name din.");
+    if (!clean.length) return fail("Kom pokkhe ekta bike / scooter number din.");
+    if (form.courierRecipientPhone && !phoneOk) return fail("Phone number thik na. 11 digit din (01XXXXXXXXX), ba khali rakhun.");
     setErr("");
-    onSave({ ...form, items: clean });
+    const addr = String(form.courierRecipientAddress || "").trim();
+    onSave({ ...form, courierRecipientPhone: phone, courierRecipientAddress: addr, customerDetails: [phone, addr].filter(Boolean).join(" · ") || form.customerDetails || "", items: clean });
   }
 
+  // Ctrl/Cmd + Enter saves from anywhere in the form, Esc closes it
+  useEffect(() => {
+    const h = e => { if (e.key === "Escape" && !busy) onClose(); };
+    window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
+  }, [busy, onClose]);
+
+  const priceLine = `Front 🏍 ${money(P.bikeFront)} · 🛵 ${money(P.scooterFront)}  |  Back ${P.bikeBack === P.scooterBack ? money(P.bikeBack) : `🏍 ${money(P.bikeBack)} · 🛵 ${money(P.scooterBack)}`}${num(P.customExtra) ? `  |  Custom +${money(P.customExtra)}` : ""}`;
+
   return <div className="overlay" onMouseDown={e => e.target === e.currentTarget && onClose()}>
-    <form className="modal ordermodal" onSubmit={submit}>
-      <div className="modalhead">
+    <form className="modal ordermodal v4" onSubmit={submit} onKeyDown={e => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") submit(e); }} noValidate>
+      <div ref={topRef} className="modalhead">
         <div>
           <h2>{editing ? "Edit order" : "New order"} <span className="serialtag">#{serialNo}</span></h2>
-          <p>{editing ? "Update the order details." : "Name, item, price — baki sob pore bhorle cholbe."}</p>
+          <p>{editing ? "Update the order details." : "Customer, bike/scooter number, side — baki sob auto. Ctrl+Enter diye save."}</p>
         </div>
         <div className="row">
           <label className="datefield">Order date<input {...f("orderDate", { type: "date" })} /></label>
@@ -109,35 +154,39 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
         </div>
       </div>
 
-      {/* tracking id: always at the top so it is quick to paste / edit */}
-      <label className="trackbox">📦 Tracking / parcel ID <small>(sticker print-e lagbe)</small>
-        <input {...f("courierId", { placeholder: "Parcel tracking ID boshao", autoComplete: "off", autoCapitalize: "characters", spellCheck: false })} />
-      </label>
+      {err && <div className="alert" role="alert">{err}</div>}
 
       {/* 1 · customer */}
       <section className="fsec">
         <h3><i>1</i> Customer</h3>
         <div className="grid ordergrid two-col">
           <label>Customer name *
-            <input {...f("customerName", { required: true, autoFocus: true, placeholder: "Customer name", list: "custnames", autoComplete: "off" })} />
+            <input {...f("customerName", { autoFocus: !editing, placeholder: "Customer name", list: "custnames", autoComplete: "off", "aria-required": true })} />
             <datalist id="custnames">{customerNames.map(n => <option key={n} value={n} />)}</datalist>
-            {prevOrders.length > 0 && <span className="seen soft-ok" role="status">🔁 Ager customer — {prevOrders.length}ti order{lastPrev ? ` · last #${serials[lastPrev.id] ?? "–"} (${shortDate(lastPrev)})` : ""}</span>}
+            {prevOrders.length > 0 && <span className="seen soft-ok" role="status">🔁 Ager customer — {prevOrders.length}ti order{lastPrev ? ` · last #${serials[lastPrev.id] ?? "–"} (${shortDate(lastPrev)})` : ""}
+              {canReuse && <button type="button" className="linkbtn inlinebtn" onClick={() => setForm(s => ({ ...s, courierRecipientPhone: s.courierRecipientPhone || lastPhone, courierRecipientAddress: s.courierRecipientAddress || lastAddr }))}>Use last phone & address</button>}</span>}
           </label>
-          <label>Customer info <small>(optional)</small><input {...f("customerDetails", { placeholder: "Phone / address / note" })} /></label>
+          <label>Phone <small>{form.courierRecipientPhone ? (phoneOk ? "✓" : "⚠ 11 digit lagbe") : "(courier er jonno)"}</small>
+            <input {...f("courierRecipientPhone", { type: "tel", inputMode: "tel", placeholder: "01XXXXXXXXX", autoComplete: "off", className: form.courierRecipientPhone && !phoneOk ? "bad" : "" })} />
+          </label>
+          <label className="wide">Delivery address <small>(optional)</small>
+            <input {...f("courierRecipientAddress", { placeholder: "House, road, area, district", autoComplete: "off" })} />
+          </label>
         </div>
       </section>
 
       {/* 2 · items */}
       <section className="fsec">
         <div className="sechead">
-          <h3><i>2</i> Items</h3>
-          <button type="button" className="linkbtn" onClick={() => setShowPrices(v => !v)}>⚙ Default prices</button>
+          <h3><i>2</i> Bike / scooter plates</h3>
+          <button type="button" className="linkbtn" onClick={() => setShowPrices(v => !v)}>⚙ Edit prices</button>
         </div>
+        <button type="button" className="pricehint" onClick={() => setShowPrices(v => !v)} title="Default prices (tap to edit)">💰 {priceLine}</button>
 
         {showPrices && <div className="pricepanel">
-          <p>Option select korle ei default price boshbe. Proti item e price alada kore edit kora jabe.</p>
+          <p>Vehicle + side select korle ei default price boshbe. Proti item e price alada kore edit kora jabe.</p>
           <div className="pricegrid">
-            {PRICE_FIELDS.map(([k, l]) => <label key={k}>{l} (৳)<input type="number" min="0" value={draft[k] ?? ""} onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))} /></label>)}
+            {PRICE_FIELDS.map(([k, l]) => <label key={k}>{l} (৳)<input type="number" min="0" inputMode="numeric" value={draft[k] ?? ""} onChange={e => setDraft(d => ({ ...d, [k]: e.target.value }))} /></label>)}
           </div>
           <div className="row"><button type="button" className="btn sm primary" onClick={saveDefaults}>Save default prices</button><button type="button" className="btn sm" onClick={() => { setDraft(P); setShowPrices(false); }}>Cancel</button></div>
         </div>}
@@ -145,66 +194,83 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
         <div className="itemlist">
           {items.map((it, idx) => {
             const { exact, similar } = findPlate(plateIndex, it.name);
-            const dupHere = normKey(it.name) && items.some(o => o.uid !== it.uid && normKey(o.name) === normKey(it.name));
-            const isCustom = it.type === "Custom";
+            const dupHere = normKey(it.name) && items.some(o => o.uid !== it.uid && normKey(o.name) === normKey(it.name) && o.side === it.side && o.vehicle === it.vehicle && o.type === it.type);
+            const isCustom = it.type === "Custom", def = itemPrice(it.vehicle, it.side, it.type, P);
             return <div key={it.uid} className={`itemrow ${isCustom ? "custom" : ""}`}>
               <div className="itemtop">
                 <span className="itemno">{idx + 1}</span>
-                <input className="itemname" value={it.name} placeholder="Bike number / item name"
-                  autoFocus={it.focus || undefined} autoComplete="off"
+                <input className="itemname" value={it.name} placeholder="Bike / scooter number  (e.g. DHAKA-METRO-HA 11-2233)" aria-label={`Plate ${idx + 1}`}
+                  autoFocus={it.focus || undefined} autoComplete="off" autoCapitalize="characters" spellCheck={false}
                   onChange={e => patch(it.uid, { name: e.target.value })}
-                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); if (it.name.trim()) addItem(); } }} />
-                {isCustom && <span className="custombadge">★ CUSTOM</span>}
-                {items.length > 1 && <button type="button" className="icon sm" onClick={() => removeItem(it.uid)} aria-label="Remove item">✕</button>}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); if (it.name.trim()) addItem(); } }} />
+                {items.length > 1 && <button type="button" className="icon sm" onClick={() => removeItem(it.uid)} aria-label={`Remove plate ${idx + 1}`}>✕</button>}
               </div>
-              {dupHere && <div className="seen exact">⚠ Ei order e ei item agei add kora ase.</div>}
+              {dupHere && <div className="seen exact">⚠ Ei order e ei plate, ei side, agei add kora ase.</div>}
               <Seen exact={exact} similar={similar} serials={serials} />
-              <div className="itemopts">
-                <label>Side<select value={it.side} onChange={e => patch(it.uid, { side: e.target.value })}>{SIDES.map(s => <option key={s}>{s}</option>)}</select></label>
-                <label>Type<select value={it.type} onChange={e => patch(it.uid, { type: e.target.value })}>{TYPES.map(s => <option key={s}>{s}</option>)}</select></label>
-                <label>Qty
+              <div className="itemseg">
+                <div><span className="lbl">Vehicle</span><Seg label="Vehicle" value={it.vehicle} options={VEHICLES} labels={VEH_LABEL} onChange={v => patch(it.uid, { vehicle: v })} /></div>
+                <div><span className="lbl">Side</span><Seg label="Side" value={it.side} options={SIDES} labels={SIDE_LABEL} onChange={v => patch(it.uid, { side: v })} /></div>
+                <div><span className="lbl">Size</span><Seg label="Size" value={it.type} options={TYPES} labels={TYPE_LABEL} onChange={v => patch(it.uid, { type: v })} /></div>
+              </div>
+              <div className="itembottom">
+                <div className="qtybox"><span className="lbl">Qty</span>
                   <div className="stepper">
                     <button type="button" onClick={() => bump(it, -1)} aria-label="Less">−</button>
-                    <input type="number" min="1" value={it.qty} onChange={e => patch(it.uid, { qty: e.target.value })} onBlur={() => patch(it.uid, { qty: Math.max(1, num(it.qty)) })} />
+                    <input type="number" min="1" inputMode="numeric" value={it.qty} aria-label="Quantity" onChange={e => patch(it.uid, { qty: e.target.value })} onBlur={() => patch(it.uid, { qty: Math.max(1, num(it.qty)) })} />
                     <button type="button" onClick={() => bump(it, 1)} aria-label="More">+</button>
                   </div>
-                </label>
-                <label>Price (৳)<input type="number" min="0" value={it.price} onChange={e => patch(it.uid, { price: e.target.value })} /></label>
+                </div>
+                <div className="pricebox"><span className="lbl">Price (৳) {it.edited ? <button type="button" className="linkbtn" onClick={() => resetPrice(it)}>reset to {money(def)}</button> : <em>auto</em>}</span>
+                  <input type="number" min="0" inputMode="numeric" value={it.price} aria-label="Price" onChange={e => patch(it.uid, { price: e.target.value })} /></div>
                 <div className="linetotal"><span>Total</span><b>{money(Math.max(0, num(it.qty)) * num(it.price))}</b></div>
               </div>
+              {normKey(it.name) && !hasPair(it) && <button type="button" className="pairbtn" onClick={() => addPair(it)}>＋ {it.side === "Front Side" ? "Back" : "Front"} side-o lagbe ({VEH_LABEL[it.vehicle]} · {money(itemPrice(it.vehicle, otherSide(it.side), it.type, P))})</button>}
             </div>;
           })}
         </div>
-        <button type="button" className="btn additem" onClick={addItem}>＋ Add another item</button>
+        <button type="button" className="btn additem" onClick={addItem}>＋ Add another plate</button>
       </section>
 
       {/* 3 · notes */}
       <section className="fsec">
-        <h3><i>3</i> Customization</h3>
-        <label className="note-field">Customization notes
-          <textarea {...f("instructions", { rows: 2, placeholder: "✍️ Color, size, text, design, customer request…" })} />
+        <h3><i>3</i> Customization <small className="opt">(optional)</small></h3>
+        <label className="note-field">
+          <textarea {...f("instructions", { rows: 2, placeholder: "✍️ Color, size, text, design, customer request…" })} aria-label="Customization notes" />
         </label>
       </section>
 
-      {/* 4 · payment */}
+      {/* 4 · delivery & payment */}
       <section className="fsec">
         <h3><i>4</i> Delivery & payment</h3>
-        <div className="grid ordergrid">
-          <label>Delivery area<select {...f("deliveryArea")}><option>Inside Dhaka</option><option>Outside Dhaka</option><option>No delivery</option><option>Custom amount</option></select></label>
-          <label>Delivery cost (৳)<input {...f("deliveryFee", { type: "number", min: 0 })} /></label>
-          <label>Amount paid (৳)<input {...f("paidAmount", { type: "number", min: 0, step: "0.01" })} /></label>
+        <div className="paygrid">
+          <div className="payblock"><span className="lbl">Delivery</span>
+            <Seg label="Delivery area" value={form.deliveryArea} options={["Inside Dhaka", "Outside Dhaka", "No delivery", "Custom amount"]} labels={{ "Inside Dhaka": "Inside Dhaka ৳80", "Outside Dhaka": "Outside ৳130", "No delivery": "None", "Custom amount": "Custom" }} onChange={setArea} />
+            {form.deliveryArea === "Custom amount" && <label className="inl">Delivery cost (৳)<input {...f("deliveryFee", { type: "number", min: 0, inputMode: "numeric" })} /></label>}
+          </div>
+          <div className="payblock"><span className="lbl">Paid so far</span>
+            <div className="paidrow">
+              <input {...f("paidAmount", { type: "number", min: 0, step: "0.01", inputMode: "decimal", "aria-label": "Amount paid" })} />
+              <button type="button" className="chip" onClick={() => setPaid(0)}>None</button>
+              <button type="button" className="chip" onClick={() => setPaid(total / 2)}>Half</button>
+              <button type="button" className="chip" onClick={() => setPaid(total - num(form.deliveryChargePaidAmount))}>Full {money(total)}</button>
+            </div>
+          </div>
           <label>Payment<select {...f("paymentStatus")}>{PAYMENTS.map(x => <option key={x}>{x}</option>)}</select></label>
           <label>Order status<select {...f("orderStatus")}>{STATUSES.map(x => <option key={x}>{x}</option>)}</select></label>
-          <label>Delivery charge paid (৳)<input {...f("deliveryChargePaidAmount", { type: "number", min: 0, max: fee, step: "0.01" })} /></label>
+          {(num(form.deliveryChargePaidAmount) > 0 || form.paymentStatus === "Delivery Charge Paid") &&
+            <label>Delivery charge paid (৳)<input {...f("deliveryChargePaidAmount", { type: "number", min: 0, max: fee, step: "0.01" })} /></label>}
         </div>
       </section>
 
-      <button type="button" className="more-toggle" onClick={() => setShowMore(v => !v)}>
+      {/* tracking id (needed for the sticker; usually added later) */}
+      <label className="trackbox">📦 Tracking / parcel ID <small>(sticker print-e lagbe, pore-o dewa jay)</small>
+        <input {...f("courierId", { placeholder: "Parcel tracking ID boshao", autoComplete: "off", autoCapitalize: "characters", spellCheck: false })} />
+      </label>
+
+      <button type="button" className="more-toggle" onClick={() => setShowMore(v => !v)} aria-expanded={showMore}>
         <span>{showMore ? "−" : "+"} More details</span><small>Courier, costs, extra fields</small>
       </button>
       {showMore && <div className="grid ordergrid moregrid">
-        <label>Courier recipient phone<input {...f("courierRecipientPhone", { placeholder: "01XXXXXXXXX" })} /></label>
-        <label className="wide">Courier delivery address<input {...f("courierRecipientAddress", { placeholder: "House, road, area, district" })} /></label>
         <label>Courier<input {...f("courierName", { placeholder: "Pathao, Steadfast…" })} /></label>
         <label className="wide">Tracking URL<input {...f("trackingUrl", { type: "url", placeholder: "https://…" })} /></label>
         <label>Delivery status<select {...f("deliveryStatus")}>{["Not shipped", "Ready for pickup", "Picked up", "In transit", "Out for delivery", "On hold", "Partially delivered", "Delivered", "Delivery failed", "Returned"].map(x => <option key={x}>{x}</option>)}</select></label>
@@ -214,13 +280,11 @@ export default function OrderModal({ initial, editing, editingId, orders, serial
         <label>Extra field 2<input {...f("reference2")} /></label>
       </div>}
 
-      {err && <div className="alert" role="alert">{err}</div>}
-
       <div className="modalfoot orderfoot">
         <div className="sum">
-          <span>{items.filter(i => i.name.trim()).length || items.length} item · {totalQty} pcs · Items {money(subtotal)} + Delivery {money(fee)}</span>
+          <span>{namedItems || items.length} plate · {totalQty} pcs · Items {money(subtotal)} + Delivery {money(fee)}</span>
           <strong>{money(total)}</strong>
-          <span className={due > 0 ? "due-highlight" : "paid-highlight"}>Due {money(due)}</span>
+          <span className={due > 0 ? "due-highlight" : "paid-highlight"}>{due > 0 ? `Due ${money(due)}` : "Fully paid ✓"}</span>
         </div>
         <div className="row">
           <button type="button" className="btn" onClick={onClose}>Cancel</button>
