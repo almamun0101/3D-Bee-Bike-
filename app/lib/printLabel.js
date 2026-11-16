@@ -1,4 +1,4 @@
-import { getDue, money, itemsText, shortDate, num } from "./shared";
+import { getDue, money, shortDate, num } from "./shared.js";
 
 // ── Thermal sticker size (mm). Change here if your roll is different. ──
 export const SIZES = ["40x30", "50x30", "50x25", "40x25", "30x20"];
@@ -65,8 +65,11 @@ const C128 = "212222 222122 222221 121223 121322 131222 122213 122312 132212 221
 export function code128Bits(text) {
   const t = String(text);
   const codes = [];
-  if (/^\d+$/.test(t) && t.length % 2 === 0) { codes.push(105); for (let i = 0; i < t.length; i += 2) codes.push(Number(t.slice(i, i + 2))); }
-  else { codes.push(104); for (const ch of t) { const c = ch.charCodeAt(0); codes.push(c >= 32 && c <= 126 ? c - 32 : 0); } }
+  if (/^\d{4,}$/.test(t)) {                       // numeric id: two digits per symbol (Code C), odd last digit via Code B
+    codes.push(105);
+    for (let i = 0; i + 1 < t.length; i += 2) codes.push(Number(t.slice(i, i + 2)));
+    if (t.length % 2) codes.push(100, t.charCodeAt(t.length - 1) - 32);
+  } else { codes.push(104); for (const ch of t) { const c = ch.charCodeAt(0); codes.push(c >= 32 && c <= 126 ? c - 32 : 0); } }
   let sum = codes[0]; for (let i = 1; i < codes.length; i++) sum += codes[i] * i;
   codes.push(sum % 103, 106);
   let bits = "", bar = true;
@@ -74,63 +77,62 @@ export function code128Bits(text) {
   return bits;
 }
 
-// draw the label on a canvas at printer resolution
+// draw the label on a canvas at printer resolution.
+// Hero = barcode + tracking number (framed, as big as the sticker allows); name / items / due / phone are small lines above it.
 function renderLabel(o, serial, scale = 1) {
   const [LW, LH] = getSize();
   const PX_W = Math.min(MAX_DOTS, Math.floor(LW * DPI_DOTS_PER_MM / 8) * 8), PX_H = LH * DPI_DOTS_PER_MM;
   const tid = trackingOf(o);
-  const total = Number(o?.total || 0), due = getDue(o), paid = Math.max(0, total - due);
+  const total = Number(o?.total || 0), due = getDue(o);
   const tk = n => "Tk " + Number(n).toLocaleString("en-US");
   const c = document.createElement("canvas"); c.width = PX_W * scale; c.height = PX_H * scale;
   const g = c.getContext("2d"); g.scale(scale, scale);
   g.fillStyle = "#fff"; g.fillRect(0, 0, PX_W, PX_H); g.fillStyle = "#000"; g.strokeStyle = "#000"; g.textBaseline = "top";
   const F = '"Noto Sans Bengali","Segoe UI",Arial,sans-serif';
-  const pad = 14, W = PX_W - pad * 2;
-  const tall = PX_H >= 240, mid = PX_H >= 200;
+  const pad = 10, W = PX_W - pad * 2;
   const fit = (txt, maxW, px, weight = 700, min = 12) => { let sz = px; g.font = `${weight} ${sz}px ${F}`; while (g.measureText(txt).width > maxW && sz > min) { sz -= 1; g.font = `${weight} ${sz}px ${F}`; } return sz; };
-  const text = (txt, x, y, px, { w = W, weight = 700, align = "left" } = {}) => { fit(txt, w, px, weight); g.textAlign = align; g.fillText(txt, x, y); };
+  // text that always fits: shrinks first, then cuts with "…" instead of running off the sticker
+  const text = (txt, x, y, px, { w = W, weight = 700, align = "left" } = {}) => {
+    fit(txt, w, px, weight); let t = String(txt);
+    if (g.measureText(t).width > w) { while (t.length > 1 && g.measureText(t + "…").width > w) t = t.slice(0, -1); t += "…"; }
+    g.textAlign = align; g.fillText(t, x, y);
+  };
+  const tall = PX_H >= 240, mid = PX_H >= 200;
 
-  // extra info lines (only as many as the sticker height allows)
-  const items = Array.isArray(o?.items) && o.items.length ? itemsText(o.items) : String(o?.bikeNumbers || "");
+  // ── compact info (small) ──
+  // short wording for the sticker: plate · Scooter · Back · Custom ×2  (Bike / Front / BRTA are the defaults and stay unwritten)
+  const short = i => [i.name, i.vehicle === "Scooter" ? "Scooter" : "", i.side === "Back Side" ? "Back" : "Front", i.type === "Custom" ? "Custom" : ""].filter(Boolean).join(" · ") + (num(i.qty) > 1 ? ` ×${num(i.qty)}` : "");
+  const list = Array.isArray(o?.items) ? o.items.filter(i => i?.name) : [];
+  const items = list.length > 1 ? `${list.length} plates: ${list.map(i => i.name).join(", ")}` : list.length ? short(list[0]) : String(o?.bikeNumbers || "");
   const phone = String(o?.courierRecipientPhone || "").trim();
-  const extras = [];
-  if (items) extras.push(items);
-  if (phone && tall) extras.push("☎ " + phone);
-  const maxExtra = tall ? 2 : mid ? 1 : 0;
-  extras.length = Math.min(extras.length, maxExtra);
+  let y = 6;
+  const nameSz = tall ? 24 : 21;
+  text(String(o?.customerName || "—"), pad, y, nameSz, { w: serial ? W * 0.8 : W });
+  if (serial) text(`#${serial}`, PX_W - pad, y + 3, 17, { w: W * 0.18, align: "right" });
+  y += nameSz + 5;
+  if (items && mid) { text(items, pad, y, 17, { weight: 600 }); y += 21; }
+  const dueTxt = due > 0 ? `DUE ${tk(due)}` : "PAID";
+  text(dueTxt, pad, y, 22, { w: phone && tall ? W * 0.52 : W, weight: 900 });
+  if (phone && tall) text(phone, PX_W - pad, y + 5, 17, { w: W * 0.46, align: "right", weight: 600 });
+  y += 27;
 
-  let y = 10;
-  // header: courier + date (left), serial (right)
-  const head = [o?.courierName || (o?.courierId ? "Steadfast" : ""), shortDate(o)].filter(Boolean).join(" · ");
-  text(head, pad, y, 17, { w: W * 0.72, weight: 600 });
-  if (serial) text(`#${serial}`, PX_W - pad, y, 18, { w: W * 0.26, align: "right" });
-  y += 24;
-  // name
-  text(String(o?.customerName || "—"), pad, y, tall ? 32 : 28); y += tall ? 38 : 33;
-  // items / phone
-  for (const ex of extras) { text(ex, pad, y, 20, { weight: 600 }); y += 25; }
-  y += 4;
-  // DUE box
-  const dueH = tall ? 40 : 36;
-  g.lineWidth = 2; g.strokeRect(pad, y, W, dueH);
-  text("DUE", pad + 8, y + (dueH - 18) / 2, 18, { w: W * 0.3, weight: 700 });
-  g.textBaseline = "middle"; const dueTxt = due > 0 ? tk(due) : "PAID"; fit(dueTxt, W * 0.64, tall ? 30 : 27, 900); g.textAlign = "right"; g.fillText(dueTxt, PX_W - pad - 8, y + dueH / 2 + 1); g.textBaseline = "top";
-  y += dueH + 6;
-  // small barcode of the tracking id, then the tracking number in a black pill
-  const rest = PX_H - y - 6, barH = Math.max(16, Math.min(26, Math.round(rest * 0.38))), pillH = Math.min(46, rest - barH - 4);
-  const bits = code128Bits(tid), mod = Math.max(1, Math.floor((W * 0.84) / bits.length));
-  const bw = bits.length * mod, bx = Math.round((PX_W - bw) / 2);
-  for (let i = 0; i < bits.length;) { if (bits[i] === "1") { let j = i; while (bits[j] === "1") j++; g.fillRect(bx + i * mod, y, (j - i) * mod, barH); i = j; } else i++; }
-  y += barH + 4;
-  const r = Math.min(10, pillH / 2); g.beginPath();
-  if (g.roundRect) g.roundRect(pad, y, W, pillH, r); else g.rect(pad, y, W, pillH);
-  g.fill();
+  // ── hero block: barcode + tracking number, in a frame ──
+  const top = y + 2, blockH = PX_H - top - 5, fx = 4, fw = PX_W - 8, inner = 8;
+  g.lineWidth = 3; const r = 10;
+  g.beginPath(); if (g.roundRect) g.roundRect(fx + 1.5, top + 1.5, fw - 3, blockH - 3, r); else g.rect(fx + 1.5, top + 1.5, fw - 3, blockH - 3); g.stroke();
+  const room = blockH - inner * 2 - 4, barH = Math.max(18, Math.round(room * 0.5)), pillH = room - barH;
+  const ax = fx + inner + 4, aw = fw - (inner + 4) * 2;               // area inside the frame
+  const bits = code128Bits(tid), mod = Math.max(1, Math.floor(aw / (bits.length + 20)));   // widest bars that still leave a 10-module quiet zone
+  const bx = Math.round(ax + (aw - bits.length * mod) / 2), by = top + inner;
+  for (let i = 0; i < bits.length;) { if (bits[i] === "1") { let j = i; while (bits[j] === "1") j++; g.fillRect(bx + i * mod, by, (j - i) * mod, barH); i = j; } else i++; }
+  const py = by + barH + 4;
+  g.beginPath(); if (g.roundRect) g.roundRect(ax, py, aw, pillH, Math.min(10, pillH / 2)); else g.rect(ax, py, aw, pillH); g.fill();
   g.fillStyle = "#fff"; g.textBaseline = "middle"; g.textAlign = "center";
   const sp = "letterSpacing" in g ? 2 : 0;
-  fit(tid, W - 24 - tid.length * sp, Math.min(40, pillH * 0.8), 800, 12);
+  fit(tid, aw - 20 - tid.length * sp, Math.max(14, Math.round(pillH * 0.9)), 900, 12);
   if (sp) g.letterSpacing = `${sp}px`;
-  g.fillText(tid, PX_W / 2 + sp / 2, y + pillH / 2 + 1);
-  if ("letterSpacing" in g) g.letterSpacing = "0px";
+  g.fillText(tid, PX_W / 2 + sp / 2, py + pillH / 2 + 1);
+  if (sp) g.letterSpacing = "0px";
   g.fillStyle = "#000";
   return c;
 }

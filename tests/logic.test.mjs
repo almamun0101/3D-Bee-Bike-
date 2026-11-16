@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { normalizeMonitor, DEFAULT_MONITOR, monitorInfo, tierOf, trackingLinkOf, fmtDuration, fromDhakaInput, toDhakaInput, monitorSummary, followUpDue } from "../app/lib/monitor.js";
 import { buildSyncPatch, codInfo, itemPrice, DEFAULT_PRICES, itemsText, itemsOfOrder, phoneOf, addressOf, trackingIdOf, customerInfoText, orderSummaryText } from "../app/lib/shared.js";
 import { buildAlerts } from "../app/lib/alerts.js";
+import { code128Bits } from "../app/lib/printLabel.js";
 
 const cfg = normalizeMonitor(null), H = 3600000, now = Date.parse("2026-11-14T12:00:00Z");
 const ago = h => new Date(now - h * H).toISOString();
@@ -127,4 +128,16 @@ test("copy helpers: customer info, phone, address, tracking id, full summary", (
   assert.equal(phoneOf(old), "01822222222"); assert.equal(addressOf(old), "Road 3, Dhanmondi");
   assert.equal(customerInfoText({ customerName: "Only Name" }), "Only Name");
   assert.doesNotMatch(orderSummaryText({ customerName: "X", items: [{ name: "P", side: "Front Side", type: "BRTA", qty: 1, price: 250 }], total: 250 }, 1), /Tracking ID/);
+});
+
+test("Code 128 barcode matches the reference encoder (python-barcode) for numeric, odd-numeric and text ids", () => {
+  const ref = {
+    "12345678": "1101001110010110011100100010110001110001011011000010100100011101101100011101011",
+    "123456789": "11010011100101100111001000101100011100010110110000101001011110111011100101100100011110101100011101011",
+    "1234567": "110100111001011001110010001011000111000101101011110111011101101110100011011101100011101011",
+    "AB-12 x": "1101001000010100011000100010110001001101110010011100110110011100101101100110011110010010111101101101100011101011",
+    "TRKQA1": "11010010000110111000101100010111010110001110110100011101010001100010011100110111010011001100011101011"
+  };
+  for (const [id, bits] of Object.entries(ref)) assert.equal(code128Bits(id), bits, id);
+  assert.ok(code128Bits("9000123456").length < code128Bits("TRK0123456").length, "all-digit ids give a shorter (= bigger bars) barcode");
 });
