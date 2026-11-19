@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { ref, onValue, push, set, update, remove } from "firebase/database";
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { getDb, getAuthInstance, getFirebaseConfigError, DB_ROOT, REQUIRE_LOGIN } from "./lib/firebase";
-import { printLabel, browserPrint, pdfPreview, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey } from "./lib/printLabel";
+import { printLabel, browserPrint, pdfPreview, changePrinter, getMode, setMode, PRINTER_MODES, SIZES, getSizeKey, setSizeKey, setLabelContext } from "./lib/printLabel.js";
+import MessageModal from "./components/MessageModal";
+import { normalizeBrand } from "./lib/brand.js";
 import { money, getDue, isPaid, isDone, fmtDate, isSteadfast, sfIds, sfGroup, SF, chargeOf, chargeDiff, courierCost, isReturned, returnLoss, buildSyncPatch, codInfo, SMART, phoneOf, addressOf, trackingIdOf, customerInfoText, orderSummaryText, num, pick, orderTime, STATUSES, PAYMENTS, DEFAULT_PRICES, itemsOfOrder, itemsText, sideShort, VEHICLES } from "./lib/shared";
 import { callSteadfast, FN_BASE } from "./lib/steadfastClient";
 import SfPill, { ChargeTag, CollectTag, TrackLink, CopyBtn } from "./components/SfPill";
@@ -90,7 +92,7 @@ const custKey = o => {
   return name.length >= 3 ? "n" + name : "";
 };
 
-function Drawer({ order, serial, cfg, now, orders, serials, onOpen, onNote, onFollowUp, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy, onSync, syncBusy }) {
+function Drawer({ order, serial, cfg, brand, now, orders, serials, onOpen, onNote, onFollowUp, onMessage, onClose, onEdit, onDelete, onQuick, onRecordPayment, onDeliveryChargePaid, onCreateCourier, courierBusy, onSync, syncBusy }) {
   const [paymentInput, setPaymentInput] = useState("");
   const [noteInput, setNoteInput] = useState("");
   const mi = monitorInfo(order, cfg, now);
@@ -116,6 +118,7 @@ function Drawer({ order, serial, cfg, now, orders, serials, onOpen, onNote, onFo
         <button className="icon" onClick={onClose} aria-label="Close">✕</button>
       </div>
       <div className="copybar" aria-label="Copy">
+        <button type="button" className="trackbtn msgbtn" onClick={() => onMessage(order)} title="Bangla message for the customer">💬 Bangla message</button>
         <CopyBtn text={customerInfoText(order)} label="📋 Customer info" title="Copy name, phone and address" />
         <CopyBtn text={phoneOf(order)} label="📞 Phone" title="Copy phone number" />
         <CopyBtn text={addressOf(order)} label="📍 Address" title="Copy address" />
@@ -158,11 +161,19 @@ function Drawer({ order, serial, cfg, now, orders, serials, onOpen, onNote, onFo
         {order.steadfastSyncError && !order.steadfastStatus && <div className="alert">{order.steadfastSyncError}</div>}
         <button className="btn" onClick={() => onSync(order)} disabled={syncBusy}>{syncBusy ? "Syncing…" : "🔄 Sync courier status"}</button>
       </section>}
-      <section className="payment-box">
-        <button className="btn primary" onClick={() => printLabel(order, serial)}>🖨️ Print sticker (Bluetooth)</button>
-        <label>Sticker size (mm)<select defaultValue={getSizeKey()} onChange={e => setSizeKey(e.target.value)}>{SIZES.map(z => <option key={z} value={z}>{z.replace("x", " × ")}</option>)}</select></label>
-        <label>Printer type<select defaultValue={getMode()} onChange={e => setMode(e.target.value)}>{Object.entries(PRINTER_MODES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
-        <div className="row wrap"><button className="btn sm" onClick={changePrinter}>Change printer</button><button className="btn sm" onClick={() => pdfPreview(order, serial)}>📄 PDF preview</button><button className="btn sm" onClick={() => browserPrint(order, serial)}>Normal print</button></div>
+      <section className="payment-box printbox">
+        <button className="btn primary" onClick={() => printLabel(order, serial)}>🖨️ Print stickers ({brand.thankYou ? "tracking + thank-you" : "tracking"})</button>
+        <div className="row wrap">
+          <button className="btn sm" onClick={() => printLabel(order, serial, "tracking")}>Tracking only</button>
+          <button className="btn sm" onClick={() => printLabel(order, serial, "thanks")}>Thank-you only</button>
+          <button className="btn sm" onClick={() => pdfPreview(order, serial)}>📄 PDF preview</button>
+          <button className="btn sm" onClick={() => browserPrint(order, serial)}>Normal print</button>
+        </div>
+        <details className="printset"><summary>Printer settings</summary>
+          <label>Sticker size (mm)<select defaultValue={getSizeKey()} onChange={e => setSizeKey(e.target.value)}>{SIZES.map(z => <option key={z} value={z}>{z.replace("x", " × ")}</option>)}</select></label>
+          <label>Printer type<select defaultValue={getMode()} onChange={e => setMode(e.target.value)}>{Object.entries(PRINTER_MODES).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+          <button className="btn sm" onClick={changePrinter}>Change Bluetooth printer</button>
+        </details>
       </section>
       {(order.courierId || order.steadfastTrackingCode) && <section className="payment-box">
         <div className="payment-summary"><span>Tracking</span><TrackLink o={order} cfg={cfg} showId /></div>
@@ -241,17 +252,20 @@ function Desk({ user }) {
   const [picked, setPicked] = useState(() => new Set());
   const [views, setViews] = useState({});
   const [cfg, setCfg] = useState(() => normalizeMonitor(null));
+  const [brand, setBrand] = useState(() => normalizeBrand(null));
+  const [msgOrder, setMsgOrder] = useState(null);
   const [monPreset, setMonPreset] = useState(null);
   const creatingRef = useRef(new Set());
   const now = useNow(30000);
+  useEffect(() => { setLabelContext({ brand, cfg }); }, [brand, cfg]);   // stickers use the page link and tracking-link template
   const [sort, setSort] = useState("newest");
   const [modal, setModal] = useState(null);   // null | { id?, values }
   const [selected, setSelected] = useState(null);
   // Esc closes the order drawer (the edit form is left alone so nothing typed is lost)
   useEffect(() => {
-    const h = e => { if (e.key === "Escape") { setExportOpen(false); if (!modal) setSelected(null); } };
+    const h = e => { if (e.key === "Escape") { setExportOpen(false); if (!modal && !msgOrder) setSelected(null); } };   // Esc closes only the top-most window
     window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
-  }, [modal]);
+  }, [modal, msgOrder]);
   const [busy, setBusy] = useState(false);
   const [courierBusy, setCourierBusy] = useState(false);
   const [toast, setToast] = useState(null);
@@ -292,9 +306,10 @@ function Desk({ user }) {
     }, err => setFirebaseError(err.message || "Unable to read expenses."));
     const offPrices = onValue(ref(db, `${DB_ROOT}/settings/defaultPrices`), snap => setPrices({ ...DEFAULT_PRICES, ...(snap.val() || {}) }), () => {});
     const offCfg = onValue(ref(db, `${DB_ROOT}/settings/monitor`), snap => setCfg(normalizeMonitor(snap.val())), () => {});
+    const offBrand = onValue(ref(db, `${DB_ROOT}/settings/brand`), snap => setBrand(normalizeBrand(snap.val())), () => {});
     const offViews = onValue(ref(db, `${DB_ROOT}/settings/views`), snap => setViews(snap.val() || {}), () => {});
     const offConn = onValue(ref(db, ".info/connected"), s => setOnline(!!s.val()));
-    return () => { offOrders(); offExpenses(); offPrices(); offCfg(); offViews(); offConn(); };
+    return () => { offOrders(); offExpenses(); offPrices(); offCfg(); offBrand(); offViews(); offConn(); };
   }, [notify]);
 
   useEffect(() => {
@@ -302,12 +317,6 @@ function Desk({ user }) {
     const timer = window.setTimeout(() => setToast(null), 3500);
     return () => window.clearTimeout(timer);
   }, [toast]);
-
-  useEffect(() => {
-    const onKey = e => { if (e.key === "Escape") { setModal(null); setSelected(null); } };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
   const selectedOrder = selected && orders.find(o => o.id === selected);
   ordersRef.current = orders;
@@ -704,6 +713,9 @@ function Desk({ user }) {
     try { await update(ref(getDb(), `${DB_ROOT}/orders/${id}`), { internalNotes: list.length ? list : null, updatedAt: new Date().toISOString() }); }
     catch (e) { notify("Could not save note: " + e.message, true); }
   }
+  async function saveBrand(b) {
+    try { await set(ref(getDb(), `${DB_ROOT}/settings/brand`), b); notify("Brand settings saved"); } catch (e) { notify("Could not save brand settings: " + e.message, true); }
+  }
   async function saveCfg(c) {
     try { await set(ref(getDb(), `${DB_ROOT}/settings/monitor`), c); notify("Settings saved"); } catch (e) { notify("Could not save settings: " + e.message, true); }
   }
@@ -797,7 +809,7 @@ function Desk({ user }) {
       {view === "monitor" && <Monitor key={monPreset?.k || 0} orders={orders} cfg={cfg} serials={serials} now={now} sync={sync} onSync={list => syncCourier(list)} onOpen={id => setSelected(id)} onFollowUp={setFollowUp} preset={monPreset} />}
       {view === "courier" && <Courier orders={orders} sync={sync} onSync={syncCourier} autoSync={autoSync} setAutoSync={setAutoSync} onOpen={id => setSelected(id)} />}
       {view === "analytics" && <Analytics orders={orders} expenses={expenses} />}
-      {view === "settings" && <Settings cfg={cfg} onSave={saveCfg} notify={notify} now={now} />}
+      {view === "settings" && <Settings cfg={cfg} onSave={saveCfg} brand={brand} onSaveBrand={saveBrand} notify={notify} now={now} />}
 
       {view === "orders" && <section className="panel">
         <div className="toolbar">
@@ -871,10 +883,11 @@ function Desk({ user }) {
       <footer>3D Bee Order Desk · live Firebase sync · times in Asia/Dhaka · {lastSynced ? `Last data update ${lastSynced.toLocaleTimeString("en-GB", { timeZone: TZ })}` : "Waiting for sync"}</footer>
     </div>
 
+    {msgOrder && <MessageModal order={orders.find(o => o.id === msgOrder.id) || msgOrder} serial={serials[msgOrder.id]} brand={brand} cfg={cfg} onClose={() => setMsgOrder(null)} />}
     <nav className="bottomnav" aria-label="Sections">{NAV.map(([k, icon, label]) => <button key={k} className={view === k ? "active" : ""} onClick={() => go(k)}><span>{icon}</span><small>{label}</small>{navBadge(k) > 0 && <b className="navbadge">{navBadge(k)}</b>}</button>)}</nav>
 
     {modal && <OrderModal initial={modal.values} editing={!!modal.id} editingId={modal.id} orders={orders} serials={serials} serialNo={modal.id ? serials[modal.id] : nextSerial} prices={prices} onSavePrices={savePrices} busy={busy} onClose={() => setModal(null)} onSave={save} />}
-    {selectedOrder && <Drawer order={selectedOrder} serial={serials[selectedOrder.id]} cfg={cfg} now={now} orders={orders} serials={serials} onOpen={setSelected} onNote={changeNote} onFollowUp={setFollowUp} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} onRecordPayment={recordPayment} onDeliveryChargePaid={markDeliveryChargePaid} onCreateCourier={createSteadfastOrder} courierBusy={courierBusy} onSync={o => syncCourier([o])} syncBusy={sync.busy} />}
+    {selectedOrder && <Drawer order={selectedOrder} serial={serials[selectedOrder.id]} cfg={cfg} brand={brand} now={now} orders={orders} serials={serials} onOpen={setSelected} onNote={changeNote} onFollowUp={setFollowUp} onMessage={setMsgOrder} onClose={() => setSelected(null)} onEdit={openEdit} onDelete={removeOrder} onQuick={quick} onRecordPayment={recordPayment} onDeliveryChargePaid={markDeliveryChargePaid} onCreateCourier={createSteadfastOrder} courierBusy={courierBusy} onSync={o => syncCourier([o])} syncBusy={sync.busy} />}
     {toast && <div className={`toast ${toast.bad ? "bad" : ""}`} role="status">{toast.text}</div>}
   </div>;
 }

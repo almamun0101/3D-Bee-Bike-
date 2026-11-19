@@ -1,13 +1,17 @@
 "use client";
 import { useEffect, useState } from "react";
 import { normalizeMonitor, DEFAULT_MONITOR, fmtAgo } from "../lib/monitor";
+import { normalizeBrand } from "../lib/brand.js";
 import { callSteadfast, FN_BASE } from "../lib/steadfastClient";
 import { copyText } from "./SfPill";
 
-export default function Settings({ cfg, onSave, notify, now }) {
+export default function Settings({ cfg, onSave, brand, onSaveBrand, notify, now }) {
   const [t, setT] = useState(cfg.tiers.map(String));
   const [stuck, setStuck] = useState(String(cfg.stuckHours));
   const [tpl, setTpl] = useState(cfg.trackingUrlTemplate);
+  const [bName, setBName] = useState(brand.pageName), [bUrl, setBUrl] = useState(brand.pageUrl), [bTag, setBTag] = useState(brand.tagline), [bBn, setBBn] = useState(brand.banglaLine), [bThanks, setBThanks] = useState(brand.thankYou);
+  useEffect(() => { setBName(brand.pageName); setBUrl(brand.pageUrl); setBTag(brand.tagline); setBBn(brand.banglaLine); setBThanks(brand.thankYou); }, [brand]);
+  const urlErr = bUrl.trim() && !normalizeBrand({ pageUrl: bUrl }).pageUrl ? "Full link din, jemon https://www.facebook.com/yourpage" : "";
   const [health, setHealth] = useState(null);
   const [busy, setBusy] = useState("");
   useEffect(() => { setT(cfg.tiers.map(String)); setStuck(String(cfg.stuckHours)); setTpl(cfg.trackingUrlTemplate); }, [cfg]);
@@ -53,6 +57,20 @@ export default function Settings({ cfg, onSave, notify, now }) {
 
     <div className="row"><button className="btn primary" disabled={!!tierErr || !!tplErr || !!stuckErr} onClick={() => onSave({ tiers: nums, stuckHours: Number(stuck), trackingUrlTemplate: tpl.trim() })}>💾 Save settings</button>
       <button className="btn ghost" onClick={() => { setT(DEFAULT_MONITOR.tiers.map(String)); setStuck(String(DEFAULT_MONITOR.stuckHours)); }}>Reset thresholds</button></div>
+
+    <section className="panel">
+      <div className="phead"><h3>🏷️ Brand & stickers</h3><small>Thank-you sticker + customer messages</small></div>
+      <p className="hint">Thank-you sticker-er QR code ei page link-e niye jabe. Link na dile QR chhara print hobe (kono link ami nijer theke boshai na).</p>
+      <div className="grid two-col brandgrid">
+        <label>Page / brand name<input value={bName} onChange={e => setBName(e.target.value)} maxLength={40} /></label>
+        <label>Page link (QR code)<input value={bUrl} onChange={e => setBUrl(e.target.value)} placeholder="https://www.facebook.com/…" spellCheck={false} inputMode="url" /></label>
+        <label className="wide">Marketing line (sticker-e chhoto kore)<input value={bTag} onChange={e => setBTag(e.target.value)} maxLength={60} placeholder="e.g. Share a photo & tag us!" /></label>
+      </div>
+      {urlErr && <p className="formerr" role="alert">{urlErr}</p>}
+      <label className="inl"><input type="checkbox" checked={bThanks} onChange={e => setBThanks(e.target.checked)} /> Proti order-e thank-you sticker-o print hobe (tracking sticker-er pore)</label>
+      <label className="inl"><input type="checkbox" checked={bBn} onChange={e => setBBn(e.target.checked)} /> Thank-you sticker-e bangla line ("ধন্যবাদ! আমাদের পেজ ফলো করুন")</label>
+      <div className="row"><button className="btn primary" disabled={!!urlErr || !bName.trim()} onClick={() => onSaveBrand({ pageName: bName.trim(), pageUrl: bUrl.trim(), tagline: bTag.trim(), banglaLine: bBn, thankYou: bThanks })}>💾 Save brand settings</button></div>
+    </section>
 
     <section className="panel">
       <div className="phead"><h3>🔌 Automation & connection status</h3><button className="btn sm" disabled={busy === "health"} onClick={check}>{busy === "health" ? "Checking…" : "Re-check"}</button></div>

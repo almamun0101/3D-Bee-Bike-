@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { normalizeMonitor, DEFAULT_MONITOR, monitorInfo, tierOf, trackingLinkOf, fmtDuration, fromDhakaInput, toDhakaInput, monitorSummary, followUpDue } from "../app/lib/monitor.js";
 import { buildSyncPatch, codInfo, itemPrice, DEFAULT_PRICES, itemsText, itemsOfOrder, phoneOf, addressOf, trackingIdOf, customerInfoText, orderSummaryText } from "../app/lib/shared.js";
 import { buildAlerts } from "../app/lib/alerts.js";
-import { code128Bits } from "../app/lib/printLabel.js";
+import { normalizeBrand, DEFAULT_BRAND } from "../app/lib/brand.js";
+import { banglaMessage, messageKind, toBn, whatsappNumber } from "../app/lib/messages.js";
 
 const cfg = normalizeMonitor(null), H = 3600000, now = Date.parse("2026-11-14T12:00:00Z");
 const ago = h => new Date(now - h * H).toISOString();
@@ -130,14 +131,40 @@ test("copy helpers: customer info, phone, address, tracking id, full summary", (
   assert.doesNotMatch(orderSummaryText({ customerName: "X", items: [{ name: "P", side: "Front Side", type: "BRTA", qty: 1, price: 250 }], total: 250 }, 1), /Tracking ID/);
 });
 
-test("Code 128 barcode matches the reference encoder (python-barcode) for numeric, odd-numeric and text ids", () => {
-  const ref = {
-    "12345678": "1101001110010110011100100010110001110001011011000010100100011101101100011101011",
-    "123456789": "11010011100101100111001000101100011100010110110000101001011110111011100101100100011110101100011101011",
-    "1234567": "110100111001011001110010001011000111000101101011110111011101101110100011011101100011101011",
-    "AB-12 x": "1101001000010100011000100010110001001101110010011100110110011100101101100110011110010010111101101101100011101011",
-    "TRKQA1": "11010010000110111000101100010111010110001110110100011101010001100010011100110111010011001100011101011"
-  };
-  for (const [id, bits] of Object.entries(ref)) assert.equal(code128Bits(id), bits, id);
-  assert.ok(code128Bits("9000123456").length < code128Bits("TRK0123456").length, "all-digit ids give a shorter (= bigger bars) barcode");
+
+test("brand settings: defaults, no guessed page link, invalid links dropped", () => {
+  assert.deepEqual(normalizeBrand(null), DEFAULT_BRAND); assert.equal(DEFAULT_BRAND.pageUrl, "", "no page link is built in");
+  assert.equal(normalizeBrand({ pageUrl: "https://www.facebook.com/3dbee" }).pageUrl, "https://www.facebook.com/3dbee");
+  for (const bad of ["javascript:alert(1)", "facebook.com/x", "https://nodot", "ftp://x.y/z", "https://a b.com", "https://" + "x".repeat(300) + ".com"]) assert.equal(normalizeBrand({ pageUrl: bad }).pageUrl, "", bad);
+  assert.equal(normalizeBrand({ pageName: "  " }).pageName, "3D Bee"); assert.equal(normalizeBrand({ pageName: "x".repeat(90) }).pageName.length, 40);
+  assert.deepEqual([normalizeBrand({ thankYou: false }).thankYou, normalizeBrand({ banglaLine: false }).banglaLine, normalizeBrand({}).thankYou], [false, false, true]);
+  assert.equal(normalizeBrand({ tagline: "" }).tagline, "", "an empty marketing line stays empty");
+});
+
+const order = { id: "a", customerName: "Rahim", courierRecipientPhone: "01711111111", courierRecipientAddress: "House 5, Mirpur", total: 1430, paidAmount: 500, deliveryFee: 80, instructions: "Black plate", orderStatus: "Pending",
+  items: [{ name: "DHAKA-METRO-HA 11-2233", vehicle: "Scooter", side: "Back Side", type: "BRTA", qty: 2, price: 500 }, { name: "DHAKA-METRO-HA 11-2233", vehicle: "Scooter", side: "Front Side", type: "Custom", qty: 1, price: 350 }] };
+
+test("bangla message: confirmation has every detail with correct amounts", () => {
+  assert.equal(toBn("Tk 1,430 #12"), "Tk ১,৪৩০ #১২");
+  const m = banglaMessage(order, 12, { brand: { pageName: "3D Bee", pageUrl: "" } });
+  for (const part of ["প্রিয় Rahim,", "অর্ডার নম্বর: #১২", "১) DHAKA-METRO-HA 11-2233 — স্কুটার পেছনের প্লেট (BRTA সাইজ) × ২ = ১,০০০ টাকা", "২) DHAKA-METRO-HA 11-2233 — স্কুটার সামনের প্লেট (কাস্টম সাইজ) × ১ = ৩৫০ টাকা",
+    "ডেলিভারি চার্জ: ৮০ টাকা (ঢাকার ভেতরে)", "সর্বমোট: ১,৪৩০ টাকা", "পরিশোধিত: ৫০০ টাকা", "বাকি টাকা: ৯৩০ টাকা", "House 5, Mirpur", "01711111111", "নোট: Black plate", "— 3D Bee"]) assert.ok(m.includes(part), part);
+  assert.ok(!/https?:/.test(m), "no link when none was configured");
+  assert.ok(banglaMessage(order, 12, { bnDigits: false }).includes("সর্বমোট: 1,430 টাকা"), "English digits on request");
+});
+
+test("bangla message: kinds by status, shipping details, paid-in-full wording, page link only when set", () => {
+  assert.deepEqual([messageKind(order), messageKind({ ...order, orderStatus: "Shipped" }), messageKind({ ...order, orderStatus: "Ready to ship", courierId: "9" }), messageKind({ ...order, orderStatus: "Completed" })], ["confirm", "shipping", "shipping", "thanks"]);
+  const ship = banglaMessage({ ...order, orderStatus: "Shipped", courierId: "1234567", courierName: "Steadfast" }, 12, { link: "https://t.example/1234567", bnDigits: false });
+  for (const part of ["কুরিয়ারে পাঠানো হয়েছে", "কুরিয়ার: Steadfast", "ট্র্যাকিং আইডি: 1234567", "ট্র্যাকিং লিংক: https://t.example/1234567", "ডেলিভারির সময় কুরিয়ারকে দিতে হবে: 930 টাকা"]) assert.ok(ship.includes(part), part);
+  assert.ok(!banglaMessage({ ...order, orderStatus: "Shipped", courierId: "1" }, 1, {}).includes("ট্র্যাকিং লিংক"), "no tracking link line without a link");
+  assert.ok(banglaMessage({ ...order, paidAmount: 1430 }, 1, {}).includes("সম্পূর্ণ টাকা পরিশোধিত"));
+  const thanks = banglaMessage({ ...order, orderStatus: "Completed" }, 5, { brand: { pageName: "3D Bee", pageUrl: "https://www.facebook.com/3dbee" } });
+  assert.ok(thanks.includes("ডেলিভারি হয়েছে") && thanks.endsWith("https://www.facebook.com/3dbee"));
+  assert.equal(banglaMessage({ customerName: "", items: [] }, 1, {}).split("\n")[0], "প্রিয় গ্রাহক,");
+});
+
+test("whatsapp number: only valid Bangladesh mobiles, with country code", () => {
+  assert.equal(whatsappNumber("01711111111"), "8801711111111"); assert.equal(whatsappNumber("+880 1711-111111"), "8801711111111");
+  assert.equal(whatsappNumber("12345"), ""); assert.equal(whatsappNumber(""), "");
 });

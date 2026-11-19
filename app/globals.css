@@ -4,7 +4,7 @@
   --bg:#f6f5f1; --surface:#fff; --ink:#1a1a17; --muted:#74726b; --line:#e8e6df;
   --gold:#f6c343; --gold-dark:#d9a51c; --black:#17171a;
   --green:#157347; --green-bg:#e6f4ec; --red:#b42318; --red-bg:#fdeceb;
-  --amber:#9a6700; --amber-bg:#fff4d6; --blue:#1d5fd1; --blue-bg:#e8f0fe; --violet:#6d3fc4; --violet-bg:#f0eafc;
+  --amber:#8a5a00; --amber-bg:#fff4d6; --blue:#1d5fd1; --blue-bg:#e8f0fe; --violet:#6d3fc4; --violet-bg:#f0eafc;
   --shadow:0 1px 2px #0000000a,0 8px 24px #0000000a; --radius:16px;
 }
 @media (prefers-color-scheme:dark){
@@ -582,3 +582,58 @@ input.bad{border-color:#e5484d;background:var(--red-bg)}
 .copybar{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}
 .copybar .trackbtn{font-size:12px;padding:6px 11px}
 .inlinecopy{margin-top:4px;display:inline-block}
+
+/* ══ readability pass: every text/background pair follows the theme (no fixed light boxes in dark mode) ══ */
+:root{--muted:#5f5d56;--orange:#9a4a00;--alert-red:#c62828}
+input::placeholder,textarea::placeholder{color:var(--muted);opacity:1}
+code{color:var(--ink)}
+.due-highlight{color:var(--red)!important}.paid-highlight{color:var(--green)!important}
+.navbadge,.badge.hot,.dot{background:var(--alert-red)}.dot.ok{background:#2fb36d}
+/* text on an --ink background must use --surface (the opposite colour), never fixed white */
+.chip.active,.smartchips .chip.active,.subtab.active,.countdot{background:var(--ink);border-color:var(--ink);color:var(--surface)}
+.chip.active b,.smartchips .chip.active b,.subtab.active b{color:inherit}
+.smartchips .chip{background:var(--bg);color:var(--muted)}.smartchips .chip b{color:var(--ink)}.smartchips .chip.active b{color:inherit}
+.chip.gold{border-color:var(--gold-dark)}
+.tab.active{background:var(--ink);color:var(--surface)}
+.btn.on{background:var(--amber-bg);color:var(--amber);border-color:var(--gold-dark)}
+.collectstat{background:var(--amber-bg);border-color:var(--gold-dark)}.collectstat strong{color:var(--ink)}.collectstat span,.collectstat small{color:var(--amber)}
+small.collecttag{background:var(--amber-bg);color:var(--amber);border:1px solid var(--gold-dark)}small.collecttag b{color:inherit}
+small.collecttag.done{background:var(--green-bg);color:var(--green);border-color:var(--green)}
+.collectbox{background:var(--amber-bg);border:1.5px solid var(--gold-dark);color:var(--ink)}.collectbox span{color:var(--amber)}.collectbox strong{color:var(--ink)}.collectbox small{color:var(--muted);opacity:1}
+.collectbox.done{background:var(--green-bg);border-color:var(--green)}.collectbox.done span{color:var(--green)}
+.trackbtn{background:var(--amber-bg);color:var(--amber)}.trackbtn.ghost{background:transparent;color:var(--muted)}
+.pricehint{color:var(--amber)}
+tr.picked td{background:var(--amber-bg)}
+.payment-summary .pill.blue{color:var(--blue)}.payment-summary .pill.green{color:var(--green)}.payment-summary .pill.red{color:var(--red)}
+.payment-summary .pill.amber{color:var(--amber)}.payment-summary .pill.violet{color:var(--violet)}.payment-summary .pill.orange{color:var(--orange)}
+@media (prefers-color-scheme:dark){:root{--muted:#9a988f;--orange:#ffb15c;--alert-red:#c62828}
+  .chip.active b,.subtab.active b{color:inherit}.collectbox{background:var(--amber-bg)}}
+/* hover never turns a control white-on-white: hover only shifts to the theme's own surface tones */
+.btn:hover:not(:disabled):not(.primary){background:var(--line);color:var(--ink)}
+.btn.primary:hover:not(:disabled){filter:brightness(.95)}
+.chip:hover:not(.active){background:var(--line);color:var(--ink)}
+.segbtn:hover:not(.active){background:var(--line);color:var(--ink)}
+.subtab:hover:not(.active){background:var(--line);color:var(--ink)}
+.menu button:hover,.alerts li:hover,.history button:hover,.navitem:hover:not(.active){color:inherit}
+.menu button:hover{background:var(--line);color:var(--ink)}
+.history button:hover,.attnrow:hover{background:var(--line)}
+tbody tr:hover td{background:var(--line)}
+tr.picked:hover td{background:var(--amber-bg)}
+.side .btn:hover{background:#ffffff1f;color:#fff}
+.hero .btn:hover:not(.primary){background:#ffffff2e;color:#fff}
+
+/* ── stickers + Bangla message ── */
+.printbox{display:flex;flex-direction:column;gap:10px}
+.printset{border:1px dashed var(--line);border-radius:12px;padding:8px 12px}
+.printset summary{cursor:pointer;font-weight:700;color:var(--muted)}
+.printset[open] summary{margin-bottom:8px}.printset label{display:flex;flex-direction:column;gap:4px;margin-bottom:8px;font-size:12px;color:var(--muted)}
+.msgmodal{max-width:640px}
+.msgkinds{margin:12px 0 8px}
+.msgdigits{margin-bottom:8px}
+.msgtext{width:100%;min-height:340px;font-size:15px;line-height:1.55;resize:vertical;font-family:inherit;padding:12px 14px;border-radius:12px;background:var(--surface);color:var(--ink);border:1.5px solid var(--line)}
+.btn.wa{background:#1a7f37;color:#fff;border-color:#1a7f37;text-decoration:none;display:inline-flex;align-items:center}
+.btn.wa:hover:not(:disabled){background:#146c2e;color:#fff}
+.trackbtn.msgbtn{background:var(--gold);color:#17171a;border-color:var(--gold-dark);font-weight:800}
+.brandgrid{margin:10px 0}
+/* windows opened from inside the order drawer (Bangla message) must sit above the drawer's own overlay */
+.overlay.front{z-index:90}

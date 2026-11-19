@@ -28,6 +28,8 @@ def contrast(page, sel):
       bg = bg || { r: 255, g: 255, b: 255 };
       const a = L(fg), b = L(bg); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
     }""", sel)
+BN = "০১২৩৪৫৬৭৮৯"
+def bn(n): return "".join(BN[int(c)] if c.isdigit() else c for c in f"{n:,}")
 def clip(page): return page.evaluate("() => navigator.clipboard.readText()")
 def tab_counts(page): return {re.sub(r"[^A-Za-z-]", "", t.inner_text().split("\n")[0]).strip(): int(re.findall(r"\d+", t.inner_text())[-1]) for t in page.locator(".subtab").all()}
 
@@ -190,7 +192,7 @@ with sync_playwright() as p:
     page.locator(".search").fill("Rahim"); page.wait_for_timeout(200); page.locator(".tablewrap tbody tr").first.click(); page.wait_for_selector(".drawer")
     check("Customer history lists the other Rahim order", "Customer history" in page.locator(".drawer").inner_text() and page.locator(".drawer .history li").count() == 1)
     # print guard + PDF guard without tracking id
-    page.get_by_role("button", name="🖨️ Print sticker (Bluetooth)").click(); page.wait_for_timeout(300)
+    page.get_by_role("button", name=re.compile("Print stickers")).click(); page.wait_for_timeout(300)
     check("Sticker print blocked without tracking ID", "Tracking ID nai" in page.locator("#bee-print-toast").inner_text(), toast(page))
     # create parcel (+ duplicate handling)
     nxt = page.locator(".nextstep"); check("Next-step button says 'Send to Steadfast'", "Send to Steadfast" in nxt.inner_text(), nxt.inner_text())
@@ -347,6 +349,50 @@ with sync_playwright() as p:
     page.locator(".monrow", has_text="Customer t3").get_by_role("button", name="⧉ Copy info").click(); page.wait_for_timeout(120)
     check("Monitor: 'Copy info' works", clip(page).startswith("Customer t3\n"))
     goto(page, "Orders"); page.locator(".search").fill("")
+
+    print("\n[M] Bangla message, brand settings, sticker controls")
+    goto(page, "Orders"); page.locator(".search").fill("Test Customer"); page.wait_for_timeout(250)
+    page.locator(".tablewrap tbody tr").first.click(); page.wait_for_selector(".drawer")
+    tc = next(o for o in DB(page, "3dbee/orders").values() if o.get("customerName") == "Test Customer")
+    due = tc["total"] - tc["paidAmount"]
+    check("Drawer print block: Print stickers + Tracking only + Thank-you only + PDF preview", all(page.locator(".printbox").get_by_role("button", name=re.compile(n)).count() >= 1 for n in ["Print stickers", "Tracking only", "Thank-you only", "PDF preview", "Normal print"]))
+    check("Printer settings are tucked away (collapsed) and default to 50 × 30", not page.locator(".printset select").first.is_visible() and page.locator(".printset select").first.input_value() == "50x30", page.locator(".printset select").first.input_value())
+    page.locator(".printset summary").click(); check("Printer settings open on demand", page.locator(".printset select").first.is_visible())
+    page.get_by_role("button", name="💬 Bangla message").click(); page.wait_for_selector(".msgmodal")
+    tx = lambda: page.locator(".msgtext").input_value()
+    check("Message: Bangla greeting + customer name", tx().startswith("প্রিয় Test Customer,"), tx()[:60])
+    check("Message: total, paid and due in Bangla digits", f"সর্বমোট: {bn(tc['total'])} টাকা" in tx() and f"বাকি টাকা: {bn(due)} টাকা" in tx(), tx())
+    check("Message: items, address and phone included", "স্কুটার পেছনের প্লেট" in tx() and "01712345678" in tx())
+    page.get_by_label("বাংলা সংখ্যা").uncheck(); page.wait_for_timeout(150)
+    check("Message: English digits on request", f"সর্বমোট: {tc['total']:,} টাকা" in tx(), tx()[:300])
+    page.get_by_role("radio", name=re.compile("শিপিং")).click(); page.wait_for_timeout(150)
+    check("Message: shipping type", "কুরিয়ারে পাঠানো হয়েছে" in tx())
+    page.get_by_role("radio", name=re.compile("কনফার্মেশন")).click(); page.locator(".msgtext").fill(tx() + "\nExtra line from me"); page.get_by_role("button", name="📋 Copy message").click(); page.wait_for_timeout(150)
+    check("Message: edited text is what gets copied", clip(page).endswith("Extra line from me") and "Copied" in page.locator(".msgmodal").inner_text())
+    href = page.locator("a.wa").get_attribute("href")
+    from urllib.parse import unquote
+    check("WhatsApp link: wa.me + country code + the text", href.startswith("https://wa.me/8801712345678?text=") and unquote(href.split("?text=")[1]) == tx(), href[:60])
+    check("WhatsApp opens in a new tab safely", page.locator("a.wa").get_attribute("target") == "_blank" and "noopener" in page.locator("a.wa").get_attribute("rel"))
+    check("No page link yet -> message has no invented link", "http" not in tx())
+    page.keyboard.press("Escape"); page.wait_for_timeout(150); check("Esc closes the message window", page.locator(".msgmodal").count() == 0)
+    check("Drawer stays open under the message window", page.locator(".drawer").count() == 1)
+    # the edit form opened from the drawer must also be clickable (not covered by the drawer overlay)
+    page.get_by_role("button", name="Edit order").click(); page.wait_for_selector(".ordermodal"); page.wait_for_timeout(200)
+    page.locator(".itemrow").first.get_by_role("radio", name="🏍 Bike").click(); page.wait_for_timeout(100)
+    check("Edit form opened from the drawer is clickable", page.locator(".itemrow").first.get_by_role("radio", name="🏍 Bike").get_attribute("aria-checked") == "true")
+    page.keyboard.press("Escape"); page.wait_for_timeout(150); page.keyboard.press("Escape")
+    # brand settings
+    goto(page, "Settings"); page.wait_for_timeout(500)
+    page.get_by_placeholder("https://www.facebook.com/…").fill("facebook.com/3dbee")
+    check("Invalid page link rejected (Save disabled)", page.locator(".formerr").count() >= 1 and page.get_by_role("button", name="💾 Save brand settings").is_disabled())
+    page.get_by_placeholder("https://www.facebook.com/…").fill("https://www.facebook.com/3dbee.page"); page.get_by_role("button", name="💾 Save brand settings").click(); page.wait_for_timeout(400)
+    br = DB(page, "3dbee/settings/brand")
+    check("Brand settings saved to Firebase", br["pageUrl"] == "https://www.facebook.com/3dbee.page" and br["pageName"] == "3D Bee" and br["thankYou"] is True, br)
+    goto(page, "Orders"); page.locator(".search").fill("Test Customer"); page.wait_for_timeout(250); page.locator(".tablewrap tbody tr").first.click(); page.wait_for_selector(".drawer")
+    page.get_by_role("button", name="💬 Bangla message").click(); page.wait_for_selector(".msgmodal")
+    page.get_by_role("radio", name=re.compile("ডেলিভারি ও ধন্যবাদ")).click(); page.wait_for_timeout(150)
+    check("Message now ends with the configured page link", tx().endswith("https://www.facebook.com/3dbee.page"), tx()[-80:])
+    page.keyboard.press("Escape"); page.keyboard.press("Escape"); page.locator(".search").fill("")
     check("No uncaught errors on desktop (the 409 is the intended duplicate-parcel response)", not [e for e in errs if "ERR_NAME_NOT_RESOLVED" not in e and "409" not in e], errs)
     ctx.close(); b.close()
 
